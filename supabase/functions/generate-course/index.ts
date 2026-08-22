@@ -4,6 +4,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const GEMINI_MODEL = "gemini-2.5-flash";
 const MODULE_ICONS = ["📘", "🔷", "🧱", "🔀", "🧬", "🗄️", "⚙️", "📦", "🧮", "🌐"];
 
 function slugify(text: string): string {
@@ -115,22 +116,29 @@ Deno.serve(async (req: Request) => {
 
     const userMessage = `Course title: ${title}\nLecturer: ${lecturer || "Not specified"}\nInstitution: ${institution || "Not specified"}\n\nSOURCE MATERIAL:\n---\n${sourceText.slice(0, 12000)}\n---\n\nGenerate the course JSON now.`;
 
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set as a Supabase secret");
+    const apiKey = Deno.env.get("GEMINI_API_KEY");
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not set as a Supabase secret");
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: GENERATE_SYSTEM_PROMPT }] },
+          contents: [{ role: "user", parts: [{ text: userMessage }] }],
+          generationConfig: {
+            maxOutputTokens: 8000,
+            responseMimeType: "application/json", // ask Gemini's native JSON mode for reliability
+          },
+        }),
       },
-      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 8000, system: GENERATE_SYSTEM_PROMPT, messages: [{ role: "user", content: userMessage }] }),
-    });
-    if (!res.ok) throw new Error(`Anthropic API error (${res.status}): ${(await res.text()).slice(0, 300)}`);
+    );
+    if (!res.ok) throw new Error(`Gemini API error (${res.status}): ${(await res.text()).slice(0, 400)}`);
     const data = await res.json();
-    const textBlock = (data.content || []).find((b: any) => b.type === "text");
-    const parsed = extractJson(textBlock?.text || "");
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const rawText = parts.map((p: any) => p.text || "").join("");
+    const parsed = extractJson(rawText); // still defensively strips fences even though JSON mode was requested
     const modules = (parsed.modules || []).map(sanitizeModule);
 
     const course = {

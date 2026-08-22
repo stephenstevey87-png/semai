@@ -6,6 +6,8 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const GEMINI_MODEL = "gemini-2.5-flash"; // stable free-tier model as of Aug 2026
+
 function stripMarkdownProse(text: string): string {
   if (!text) return "";
   let t = text.replace(/```[\s\S]*?```/g, " ");
@@ -100,22 +102,32 @@ Deno.serve(async (req: Request) => {
     const curriculum = await loadCurriculum(courseId);
     const system = buildSystemPrompt(curriculum, studentName, context);
 
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set as a Supabase secret");
+    const apiKey = Deno.env.get("GEMINI_API_KEY");
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not set as a Supabase secret");
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+    // Gemini uses "model" for the assistant role, not "assistant".
+    const contents = clean.map((m: any) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    }));
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: system }] },
+          contents,
+          generationConfig: { maxOutputTokens: 600 },
+        }),
       },
-      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 600, system, messages: clean }),
-    });
-    if (!res.ok) throw new Error(`Anthropic API error (${res.status}): ${(await res.text()).slice(0, 300)}`);
+    );
+    if (!res.ok) throw new Error(`Gemini API error (${res.status}): ${(await res.text()).slice(0, 400)}`);
     const data = await res.json();
-    const textBlock = (data.content || []).find((b: any) => b.type === "text");
-    const reply = stripMarkdownProse(textBlock?.text || "");
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const rawText = parts.map((p: any) => p.text || "").join("");
+    const reply = stripMarkdownProse(rawText);
 
     return new Response(JSON.stringify({ reply }), {
       headers: { ...corsHeaders, "content-type": "application/json" },

@@ -6,7 +6,7 @@ anything — to your students when you're not around. Any lecturer can sign in, 
 course/module outline, and SEMAI generates the slides, notes, and hands-on exercises,
 then delivers the lecture hands-free with live voice narration.
 
-Claude AI brain · Browser voice · Slide + practical-screen switching · Multi-lecturer
+Gemini AI brain · Browser voice · Slide + practical-screen switching · Multi-lecturer
 Supabase backend (database, auth, and Edge Functions) · Autonomous "teach → check-in →
 advance" flow
 
@@ -25,7 +25,7 @@ Supabase
   ├─ Postgres database   (courses, modules, slides, profiles) — RLS-protected
   ├─ Auth                (lecturer sign-in, email + password)
   └─ Edge Functions       (chat, explain-slide, generate-course)
-                           — holds ANTHROPIC_API_KEY server-side, calls Claude
+                           — holds GEMINI_API_KEY server-side, calls Gemini
 ```
 
 - **Reads** (loading a course, listing courses for the Join screen) go straight from
@@ -34,7 +34,7 @@ Supabase
   to Supabase — ownership is enforced by Postgres Row Level Security itself
   (`supabase/schema.sql`), not by a backend middleware layer.
 - **AI calls** (chat, slide narration, course generation) go through three Supabase
-  Edge Functions in `supabase/functions/`, which is the only place your Anthropic API
+  Edge Functions in `supabase/functions/`, which is the only place your Gemini API
   key lives — it's never sent to the browser.
 
 A legacy Flask backend still exists in `backend/` from an earlier version of this
@@ -78,12 +78,21 @@ supabase functions deploy explain-slide --no-verify-jwt
 supabase functions deploy generate-course --no-verify-jwt
 ```
 
-Then set your Anthropic key as a secret (this is the ONE manual step — there's no way
+Then set your Gemini key as a secret (this is the ONE manual step — there's no way
 to do this except through the dashboard or CLI):
 ```bash
-supabase secrets set ANTHROPIC_API_KEY=your-anthropic-api-key
+supabase secrets set GEMINI_API_KEY=your-gemini-api-key
 ```
 Or via the dashboard: **Project Settings → Edge Functions → Secrets**.
+
+**Note on newer "AQ." format keys:** Google AI Studio started issuing a new key format
+(`AQ.Ab...` instead of the older `AIzaSy...`) in 2026. These functions authenticate via
+the `x-goog-api-key` header, which is the current documented method. There have been
+scattered reports of `AQ.` keys getting rejected on some accounts depending on rollout
+status — if you get a 401/403 from the `chat`, `explain-slide`, or `generate-course`
+functions, check the Supabase function logs first; if it's an auth error specifically,
+regenerating the key in AI Studio or checking Google's current docs at
+ai.google.dev/gemini-api/docs/api-key is the next step.
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are automatically available inside every
 Edge Function — you don't need to set those yourself.
@@ -144,14 +153,14 @@ and Docker).
 
 `backend/` was the original server layer before this project moved to Supabase Edge
 Functions. It's kept in the repo for reference but is **not part of the deployed app**
-and doesn't need `ANTHROPIC_API_KEY`, Render, or anything else set up for it to work —
+and doesn't need `GEMINI_API_KEY`, Render, or anything else set up for it to work —
 the frontend no longer calls it. Safe to delete if you don't need the reference.
 
 ## Upgrading Voice (ElevenLabs)
 
 Browser Web Speech API is used for TTS/STT today (free, works everywhere, sounds
 noticeably more synthetic than a neural voice). To upgrade: add a new Edge Function
-that proxies to ElevenLabs the same way the existing three proxy to Anthropic, storing
+that proxies to ElevenLabs the same way the existing three proxy to Gemini, storing
 `ELEVENLABS_API_KEY` as another Supabase secret.
 
 ## Tech Stack
@@ -161,6 +170,6 @@ that proxies to ElevenLabs the same way the existing three proxy to Anthropic, s
 | Hosting        | Netlify                         | Free         |
 | Database + Auth| Supabase (Postgres + Auth)      | Free tier    |
 | AI Backend     | Supabase Edge Functions         | Free tier    |
-| AI Brain       | Claude API (Anthropic)          | Pay per use  |
+| AI Brain       | Gemini API (Google AI Studio)   | Free tier    |
 | Voice          | Browser Web Speech API          | Free         |
 | Voice+         | ElevenLabs (upgrade)            | Free tier available |

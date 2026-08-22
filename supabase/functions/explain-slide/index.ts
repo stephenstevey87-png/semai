@@ -4,6 +4,8 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const GEMINI_MODEL = "gemini-2.5-flash";
+
 function stripMarkdownProse(text: string): string {
   if (!text) return "";
   let t = text.replace(/```[\s\S]*?```/g, " ");
@@ -55,27 +57,26 @@ Deno.serve(async (req: Request) => {
     const bulletBlock = bullets.map((b) => `- ${b}`).join("\n");
     const userMessage = `Slide title: ${slideTitle}\n\nBullet points to teach (explain every single one, in order):\n${bulletBlock}\n\nPlease teach this slide now.`;
 
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set as a Supabase secret");
+    const apiKey = Deno.env.get("GEMINI_API_KEY");
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not set as a Supabase secret");
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: buildExplainPrompt(courseTitle, moduleTitle, studentName) }] },
+          contents: [{ role: "user", parts: [{ text: userMessage }] }],
+          generationConfig: { maxOutputTokens: 900 },
+        }),
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 900,
-        system: buildExplainPrompt(courseTitle, moduleTitle, studentName),
-        messages: [{ role: "user", content: userMessage }],
-      }),
-    });
-    if (!res.ok) throw new Error(`Anthropic API error (${res.status}): ${(await res.text()).slice(0, 300)}`);
+    );
+    if (!res.ok) throw new Error(`Gemini API error (${res.status}): ${(await res.text()).slice(0, 400)}`);
     const data = await res.json();
-    const textBlock = (data.content || []).find((b: any) => b.type === "text");
-    const explanation = stripMarkdownProse(textBlock?.text || "");
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const rawText = parts.map((p: any) => p.text || "").join("");
+    const explanation = stripMarkdownProse(rawText);
 
     return new Response(JSON.stringify({ explanation }), {
       headers: { ...corsHeaders, "content-type": "application/json" },
