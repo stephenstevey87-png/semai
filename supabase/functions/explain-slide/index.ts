@@ -1,0 +1,88 @@
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+function stripMarkdownProse(text: string): string {
+  if (!text) return "";
+  let t = text.replace(/```[\s\S]*?```/g, " ");
+  t = t.replace(/[*_#>`]/g, "");
+  t = t.replace(/^\s*[-•]\s+/gm, "");
+  t = t.replace(/\s+/g, " ").trim();
+  return t;
+}
+
+function buildExplainPrompt(courseTitle: string, moduleTitle: string, studentName: string): string {
+  return `You are SEMAI, an AI lecturer created by Steven Ssemambo (SayMyTech Developers),
+currently teaching ${courseTitle}, module "${moduleTitle}", to a student named ${studentName}.
+
+You are presenting a slide. You have been given the slide's title and its bullet points below.
+Your job is to TEACH the slide the way a real lecturer would present it at the front of a class —
+NOT to read the bullets aloud.
+
+Follow this exactly:
+- Treat each bullet point as a topic to teach, in the order given. Do not skip any bullet.
+- For EVERY bullet point: explain what it means in plain language, say why it matters, and give
+  a short concrete example or analogy where useful — the bullet text is only a summary, your job
+  is to unpack it.
+- Use natural spoken transitions between points.
+- Address ${studentName} by name once or twice, naturally, not in every sentence.
+- Do not stop early. You must explain ALL of the bullet points provided before finishing.
+- This will be converted to speech: no markdown, no asterisks, no bullet symbols, no headers,
+  no numbered lists — pure spoken prose only, in full sentences.
+- End with a short natural line inviting questions.
+- Aim for a thorough explanation — around 150 to 260 words for a slide with several points.`;
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  try {
+    const body = await req.json();
+    const courseTitle = body.courseTitle || "this course";
+    const moduleTitle = body.moduleTitle || "this module";
+    const studentName = body.studentName || "Student";
+    const slideTitle = body.slideTitle || "";
+    const bullets: string[] = body.bullets || [];
+
+    if (bullets.length === 0) {
+      return new Response(JSON.stringify({ error: "bullets required" }), {
+        status: 400, headers: { ...corsHeaders, "content-type": "application/json" },
+      });
+    }
+
+    const bulletBlock = bullets.map((b) => `- ${b}`).join("\n");
+    const userMessage = `Slide title: ${slideTitle}\n\nBullet points to teach (explain every single one, in order):\n${bulletBlock}\n\nPlease teach this slide now.`;
+
+    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set as a Supabase secret");
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 900,
+        system: buildExplainPrompt(courseTitle, moduleTitle, studentName),
+        messages: [{ role: "user", content: userMessage }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Anthropic API error (${res.status}): ${(await res.text()).slice(0, 300)}`);
+    const data = await res.json();
+    const textBlock = (data.content || []).find((b: any) => b.type === "text");
+    const explanation = stripMarkdownProse(textBlock?.text || "");
+
+    return new Response(JSON.stringify({ explanation }), {
+      headers: { ...corsHeaders, "content-type": "application/json" },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: String((err as any)?.message || err) }), {
+      status: 500, headers: { ...corsHeaders, "content-type": "application/json" },
+    });
+  }
+});

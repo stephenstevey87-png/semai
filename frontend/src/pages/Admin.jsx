@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getCourses, deleteCourse, saveCourse, generateCourse, uploadCourseSource } from "../api";
+import { getCourses, deleteCourse, saveCourse, generateCourse } from "../api";
 import { supabase, signUpLecturer, signInLecturer, signOutLecturer, getLecturerProfile } from "../supabaseClient";
 
 export default function Admin({ onBack }) {
@@ -77,9 +77,12 @@ export default function Admin({ onBack }) {
     if (!file) return;
     setUploadLoading(true); setGenStatus("");
     try {
-      const { text } = await uploadCourseSource(file);
+      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+        throw new Error("PDF upload isn't supported in this version — paste the text directly, or upload a .txt file instead.");
+      }
+      const text = await file.text();
       setGenForm(f => ({ ...f, sourceText: f.sourceText ? `${f.sourceText}\n\n${text}` : text }));
-      setGenStatus(`✅ Extracted text from ${file.name} — review it below before generating.`);
+      setGenStatus(`✅ Loaded text from ${file.name} — review it below before generating.`);
     } catch (err) {
       setGenStatus(`❌ ${err.message}`);
     }
@@ -89,7 +92,7 @@ export default function Admin({ onBack }) {
 
   const runGenerate = async () => {
     if (!genForm.title.trim()) { setGenStatus("❌ Course title is required."); return; }
-    if (!genForm.sourceText.trim()) { setGenStatus("❌ Describe the content, or upload a PDF/file first."); return; }
+    if (!genForm.sourceText.trim()) { setGenStatus("❌ Describe the content, or upload a .txt file first."); return; }
     setGenLoading(true); setGenStatus(""); setPreview(null);
     try {
       const course = await generateCourse(genForm);
@@ -247,11 +250,11 @@ export default function Admin({ onBack }) {
               <label style={{ fontSize:11, color:"#6B7280" }}>INSTITUTION</label>
               <input {...genInp("institution")} placeholder="e.g. Makerere University"/>
 
-              <label style={{ fontSize:11, color:"#6B7280" }}>UPLOAD SLIDES / SYLLABUS (PDF or .txt)</label>
+              <label style={{ fontSize:11, color:"#6B7280" }}>UPLOAD NOTES (.txt)</label>
               <div style={{ display:"flex", gap:10, alignItems:"center", marginBottom:12 }}>
-                <input ref={fileInputRef} type="file" accept=".pdf,.txt" onChange={handleFile}
+                <input ref={fileInputRef} type="file" accept=".txt" onChange={handleFile}
                   style={{ fontSize:12, color:"#9CA3AF" }}/>
-                {uploadLoading && <span style={{ fontSize:11, color:"#A78BFA" }}>Extracting text…</span>}
+                {uploadLoading && <span style={{ fontSize:11, color:"#A78BFA" }}>Loading…</span>}
               </div>
 
               <label style={{ fontSize:11, color:"#6B7280" }}>OR PASTE YOUR COURSE / MODULE OUTLINE *</label>
