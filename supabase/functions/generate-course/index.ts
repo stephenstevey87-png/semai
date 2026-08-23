@@ -151,6 +151,7 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     const msg = String((err as any)?.message || err);
+    console.error("generate-course function error:", msg);
     const status = msg.includes("JSON") ? 502 : 500;
     return new Response(JSON.stringify({ error: msg }), {
       status, headers: { ...corsHeaders, "content-type": "application/json" },
