@@ -29,7 +29,7 @@ export function useSEMAI({ courseId, studentName, speak }) {
     try {
       const data = await sendChat({
         messages:    [...messages, userMsg],
-        courseId:    courseId || "tdit214",
+        courseId:    courseId || "",
         studentName: studentName || "Student",
         context,
       });
