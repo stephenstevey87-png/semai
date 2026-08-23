@@ -1,6 +1,6 @@
 import { supabase } from "./supabaseClient";
 
-// ── AI calls — via Supabase Edge Functions (ANTHROPIC_API_KEY stays server-side) ──
+// ── AI calls — via Supabase Edge Functions (GEMINI_API_KEY stays server-side) ──
 export async function sendChat({ messages, courseId, studentName, context }) {
   const { data, error } = await supabase.functions.invoke("chat", {
     body: { messages, courseId, studentName, context },

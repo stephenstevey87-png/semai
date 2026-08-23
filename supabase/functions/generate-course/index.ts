@@ -129,16 +129,15 @@ Deno.serve(async (req: Request) => {
           contents: [{ role: "user", parts: [{ text: userMessage }] }],
           generationConfig: {
             maxOutputTokens: 8000,
-            responseMimeType: "application/json", // ask Gemini's native JSON mode for reliability
+            responseMimeType: "application/json", // Gemini can be constrained to emit valid JSON directly
           },
         }),
       },
     );
-    if (!res.ok) throw new Error(`Gemini API error (${res.status}): ${(await res.text()).slice(0, 400)}`);
+    if (!res.ok) throw new Error(`Gemini API error (${res.status}): ${(await res.text()).slice(0, 300)}`);
     const data = await res.json();
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const rawText = parts.map((p: any) => p.text || "").join("");
-    const parsed = extractJson(rawText); // still defensively strips fences even though JSON mode was requested
+    const rawText = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || "").join("") || "";
+    const parsed = extractJson(rawText);
     const modules = (parsed.modules || []).map(sanitizeModule);
 
     const course = {

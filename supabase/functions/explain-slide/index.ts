@@ -72,10 +72,9 @@ Deno.serve(async (req: Request) => {
         }),
       },
     );
-    if (!res.ok) throw new Error(`Gemini API error (${res.status}): ${(await res.text()).slice(0, 400)}`);
+    if (!res.ok) throw new Error(`Gemini API error (${res.status}): ${(await res.text()).slice(0, 300)}`);
     const data = await res.json();
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const rawText = parts.map((p: any) => p.text || "").join("");
+    const rawText = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || "").join("") || "";
     const explanation = stripMarkdownProse(rawText);
 
     return new Response(JSON.stringify({ explanation }), {

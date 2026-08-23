@@ -6,7 +6,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const GEMINI_MODEL = "gemini-2.5-flash"; // stable free-tier model as of Aug 2026
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 function stripMarkdownProse(text: string): string {
   if (!text) return "";
@@ -105,8 +105,9 @@ Deno.serve(async (req: Request) => {
     const apiKey = Deno.env.get("GEMINI_API_KEY");
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set as a Supabase secret");
 
-    // Gemini uses "model" for the assistant role, not "assistant".
-    const contents = clean.map((m: any) => ({
+    // Gemini uses "user"/"model" roles (not "user"/"assistant") and a top-level
+    // system_instruction field rather than a system message in the array.
+    const geminiContents = clean.map((m: any) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content }],
     }));
@@ -118,15 +119,14 @@ Deno.serve(async (req: Request) => {
         headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           system_instruction: { parts: [{ text: system }] },
-          contents,
+          contents: geminiContents,
           generationConfig: { maxOutputTokens: 600 },
         }),
       },
     );
-    if (!res.ok) throw new Error(`Gemini API error (${res.status}): ${(await res.text()).slice(0, 400)}`);
+    if (!res.ok) throw new Error(`Gemini API error (${res.status}): ${(await res.text()).slice(0, 300)}`);
     const data = await res.json();
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const rawText = parts.map((p: any) => p.text || "").join("");
+    const rawText = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || "").join("") || "";
     const reply = stripMarkdownProse(rawText);
 
     return new Response(JSON.stringify({ reply }), {
