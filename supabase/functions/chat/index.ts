@@ -46,7 +46,7 @@ async function loadCurriculum(courseId: string): Promise<string> {
         id: m.id, icon: m.icon, title: m.title,
         slides: (slidesByModule[m.id] || [])
           .sort((a: any, b: any) => a.position - b.position)
-          .map((s: any) => ({ title: s.title, bullets: s.bullets })),
+          .map((s: any) => ({ title: s.title, subtitle: s.subtitle || "", bullets: s.bullets, highlight: s.highlight || "" })),
         practicalType: m.practical_type, practicalLanguage: m.practical_language,
         practical: m.practical, practicalNote: m.practical_note,
       })),

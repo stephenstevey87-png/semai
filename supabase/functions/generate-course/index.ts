@@ -32,11 +32,11 @@ function extractJson(raw: string): any {
   return JSON.parse(t);
 }
 
-const GENERATE_SYSTEM_PROMPT = `You are an expert curriculum designer helping a lecturer turn their raw
-course material (a description, a syllabus, or pasted slide/notes/PDF text) into a structured
-lecture course for SEMAI, an AI lecturer app. This app is used across ALL subjects — programming,
-business, marketing, accounting, history, science, law, anything a lecturer teaches — not just
-programming.
+const GENERATE_SYSTEM_PROMPT = `You are an expert curriculum designer AND presentation designer helping a
+lecturer turn their raw course material (a description, a syllabus, or pasted slide/notes/PDF text)
+into a structured lecture course for SEMAI, an AI lecturer app. This app is used across ALL subjects —
+programming, business, marketing, accounting, history, science, law, anything a lecturer teaches — not
+just programming.
 
 Return ONLY valid JSON — no markdown fences, no commentary, no prose before or after — matching
 EXACTLY this schema:
@@ -50,7 +50,12 @@ EXACTLY this schema:
       "icon": "one relevant emoji",
       "title": "Module title",
       "slides": [
-        { "title": "Slide title", "bullets": ["point 1", "point 2", "point 3", "point 4"] }
+        {
+          "title": "Slide title — short, punchy, like a real presentation slide heading",
+          "subtitle": "one-sentence framing line giving context for this slide — shown under the title",
+          "bullets": ["a complete, informative point — a real statement someone could learn from, not a bare keyword fragment", "..."],
+          "highlight": "an optional standout fact, statistic, quote, or one-liner worth visually calling out on this slide — empty string if nothing fits"
+        }
       ],
       "practicalType": "code | example | none",
       "practicalLanguage": "the programming language if practicalType is code, e.g. java, python, sql — otherwise empty string",
@@ -60,15 +65,25 @@ EXACTLY this schema:
   ]
 }
 
-Rules:
+Rules for SLIDE CONTENT — this is critical, read carefully:
+- These are real presentation slides a student will actually look at, not a bare outline. Each bullet
+  must be a complete, informative statement that teaches something on its own even before the lecturer
+  says a word — write it the way a well-prepared university lecturer would design their actual slide deck,
+  not a list of keyword fragments.
+- Bullets: aim for roughly 12-22 words each, full sentences or clear clauses. 3 to 5 bullets per slide —
+  fewer, richer bullets beat a wall of short fragments.
+- subtitle: one short sentence (under 18 words) that frames what the slide is about — think of it as the
+  line right under a slide title in a polished deck.
+- highlight: use this SPARINGLY and only when there's a genuinely notable fact, statistic, quote, or
+  one-liner that deserves visual emphasis — leave it as an empty string on slides where nothing stands out
+  that way. Don't force one onto every slide.
 - Decide practicalType per module based on the subject: use "code" only for programming/technical
   subjects where showing real source code genuinely helps (pick the appropriate language). Use
   "example" for a worked example, mini case study, or practice scenario for non-programming subjects
   (business, marketing, accounting, history, law, science, etc). Use "none" only if a hands-on
   section genuinely doesn't fit that module.
 - Produce 3 to 7 modules depending on how much source material is given — don't pad if the source is thin.
-- Each module should have 2 to 4 slides, each slide with 3 to 6 bullets. Bullets are short summary
-  phrases — under 15 words each.
+- Each module should have 2 to 4 slides.
 - The "practical" field must be plain text only — never wrap it in fences or HTML, regardless of practicalType.
 - Base everything strictly on the source material provided.
 - Output must be a single JSON object and nothing else.`;
@@ -78,7 +93,9 @@ function sanitizeModule(m: any, i: number) {
   const icon = m.icon || MODULE_ICONS[i % MODULE_ICONS.length];
   const slides = (m.slides || []).map((s: any) => ({
     title: s.title || "Untitled slide",
+    subtitle: (s.subtitle || "").trim(),
     bullets: (s.bullets || []).filter((b: any) => typeof b === "string" && b.trim()),
+    highlight: (s.highlight || "").trim(),
   }));
   let practicalType = m.practicalType;
   if (!["code", "example", "none"].includes(practicalType)) {

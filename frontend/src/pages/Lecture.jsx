@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getCourse } from "../api";
 import { useVoice } from "../hooks/useVoice";
 import { useSEMAI } from "../hooks/useSEMAI";
@@ -22,105 +22,160 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
   const [handMsg,  setHandMsg]  = useState("");
   const [drawerOpen,setDrawerOpen]=useState(false);
 
+  // ── Autonomous lecture flow ────────────────────────────────────────────
+  const [autoTeach, setAutoTeach] = useState(true);   // when on, SEMAI drives itself through the lecture
+  const [waiting,   setWaiting]   = useState(false);   // true while SEMAI is checking the student understood
+  const [countdown, setCountdown] = useState(0);
+
   const voice = useVoice();
   const semai = useSEMAI({ courseId, studentName, speak: voice.speak });
 
+  // Refs mirror the latest state so timers/voice callbacks never act on stale values.
+  const modRef = useRef(mod);             useEffect(() => { modRef.current = mod; }, [mod]);
+  const slideIdxRef = useRef(slideIdx);   useEffect(() => { slideIdxRef.current = slideIdx; }, [slideIdx]);
+  const courseRef = useRef(course);       useEffect(() => { courseRef.current = course; }, [course]);
+  const autoTeachRef = useRef(autoTeach); useEffect(() => { autoTeachRef.current = autoTeach; }, [autoTeach]);
+  const countdownTimer = useRef(null);
+
+  const clearCountdown = () => { if (countdownTimer.current) { clearInterval(countdownTimer.current); countdownTimer.current = null; } };
+  useEffect(() => () => { clearCountdown(); voice.stopListening(); }, []); // cleanup on unmount
+
   // Load course
   useEffect(() => {
-    getCourse(courseId)
-      .then(c => { setCourse(c); })
-      .catch(() => {});
+    getCourse(courseId).then(setCourse).catch(() => {});
   }, [courseId]);
 
   // Timer
   useEffect(() => {
-    const t = setInterval(() => setSecs(s => s+1), 1000);
+    const t = setInterval(() => setSecs(s => s + 1), 1000);
     return () => clearInterval(t);
   }, []);
 
   // Unread badge
   useEffect(() => {
-    if (!chatOpen && semai.messages.length > 0 && semai.messages.at(-1).role==="assistant") {
-      setUnread(n => n+1);
+    if (!chatOpen && semai.messages.length > 0 && semai.messages.at(-1).role === "assistant") {
+      setUnread(n => n + 1);
     }
   }, [semai.messages]);
 
-  // ── Intro on mount ────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!course) return;
-    const intro = `Hello ${studentName}, and welcome! I am SEMAI, your AI lecturer for ${course.title}, created by Steven Ssemambo of SayMyTech Developers. I am here to guide you through this course from start to finish. I will begin with the theory slides, then switch to the live code editor so we can practise together. You can ask me anything at any time by typing or speaking. Let us begin, class!`;
-    setTimeout(() => {
-      voice.speak(intro, () => setScreen("menu"));
-    }, 600);
-    setScreen("welcome");
-  }, [course]);
+  // Teach one slide, then — if auto-teach is on — check the student actually understood before moving on.
+  const teach = (moduleTitle, slide, isLast) => {
+    semai.teachSlide({
+      courseTitle: courseRef.current?.title, moduleTitle,
+      slideTitle: slide.title, slideSubtitle: slide.subtitle, highlight: slide.highlight,
+      bullets: slide.bullets,
+    }, () => {
+      if (autoTeachRef.current) beginCheckIn(isLast);
+    });
+  };
+
+  const beginCheckIn = (isLast) => {
+    setWaiting(true);
+    setCountdown(8);
+    clearCountdown();
+    countdownTimer.current = setInterval(() => {
+      setCountdown(c => {
+        if (c <= 1) { clearCountdown(); continueNow(isLast); return 0; }
+        return c - 1;
+      });
+    }, 1000);
+    // Best-effort: if the mic is on, listen for a spoken "yes"/question during the check-in window.
+    if (!voice.micMuted) voice.startListening(transcript => handleCheckInSpeech(transcript, isLast), { silent: true });
+  };
+
+  const handleCheckInSpeech = (transcript, isLast) => {
+    const t = transcript.toLowerCase().trim();
+    const continueWords = ["yes","yeah","yep","okay","ok","continue","next","understood","got it","ready","move on","i understand","sure","fine","good","makes sense"];
+    if (t.length < 40 && continueWords.some(w => t.includes(w))) {
+      continueNow(isLast);
+    } else {
+      clearCountdown(); setWaiting(false);
+      askSemai(transcript); // treat anything else as a real question
+    }
+  };
+
+  const continueNow = (isLast) => {
+    clearCountdown(); setWaiting(false); voice.stopListening();
+    if (isLast) {
+      const m = modRef.current;
+      const has = m?.practicalType && m.practicalType !== "none" && m.practical;
+      if (has) goIDEAuto();
+      else voice.speak(`Well done, class! That completes all the slides for ${m?.title}. This module doesn't include a hands-on exercise, so feel free to ask me questions, or choose another module whenever you're ready.`);
+      return;
+    }
+    const next = slideIdxRef.current + 1;
+    setSlideIdx(next);
+    const s = modRef.current.slides[next];
+    teach(modRef.current.title, s, next === modRef.current.slides.length - 1);
+  };
+
+  const pauseForQuestion = () => {
+    clearCountdown(); setWaiting(false); voice.stopListening();
+    setChatOpen(true); setUnread(0);
+  };
+
+  const goIDEAuto = () => {
+    const m = modRef.current;
+    setScreen("ide");
+    const label = m.practicalType === "code" ? "the live code editor" : "a worked example";
+    const detail = m.practicalType === "code" ? "Watch the screen carefully as I walk you through the code." : "Let's look at how this applies in practice.";
+    voice.speak(`Well done, class! You have covered all the slides for ${m.title}. I am now switching to ${label}. ${detail}`, () => {
+      if (m?.practicalNote) voice.speak(m.practicalNote);
+    });
+  };
 
   // ── Start module ──────────────────────────────────────────────────────────
-  const startMod = useCallback((m) => {
+  const startMod = (m) => {
+    clearCountdown(); setWaiting(false); voice.stopListening();
     setMod(m); setSlideIdx(0); setScreen("slides"); setDrawerOpen(false);
     const firstSlide = m.slides[0];
     voice.speak(`Excellent choice! Let us begin with ${m.title}.`, () => {
-      if (firstSlide) {
-        semai.teachSlide({
-          courseTitle: course?.title, moduleTitle: m.title,
-          slideTitle: firstSlide.title, bullets: firstSlide.bullets,
-        });
-      }
+      if (firstSlide) teach(m.title, firstSlide, m.slides.length === 1);
     });
-  }, [voice, semai, course]);
+  };
 
-  // ── Slide navigation ──────────────────────────────────────────────────────
-  const nextSlide = useCallback(() => {
-    if (!mod) return;
-    const next = slideIdx + 1;
-    if (next < mod.slides.length) {
-      setSlideIdx(next);
-      const s = mod.slides[next];
-      semai.teachSlide({
-        courseTitle: course?.title, moduleTitle: mod.title,
-        slideTitle: s.title, bullets: s.bullets,
+  // Auto-welcome → auto-introduce the course → auto-start the first module, hands-free.
+  useEffect(() => {
+    if (!course) return;
+    const hasCode = course.modules?.some(m => m.practicalType === "code");
+    const intro = `Hello ${studentName}, and welcome! I am SEMAI, your AI lecturer for ${course.title}, created by Steven Ssemambo of SayMyTech Developers. I am here to guide you through this course from start to finish. I will begin with the theory slides${hasCode ? ", then switch to the live code editor so we can practise together" : ""}. You can ask me anything at any time by typing or speaking. Let us begin, class!`;
+    setScreen("welcome");
+    const t = setTimeout(() => {
+      voice.speak(intro, () => {
+        if (course.modules?.length) startMod(course.modules[0]);
+        else setScreen("menu");
       });
-    } else {
-      setScreen("ide");
-      voice.speak(`Well done, class! You have covered all the slides for ${mod.title}. I am now switching to the live code editor. Watch the screen carefully as I walk you through the code.`);
-    }
-  }, [mod, slideIdx, voice, semai, course]);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [course]);
 
-  const prevSlide = () => { if (slideIdx > 0) setSlideIdx(s => s-1); };
-
-  const goIDE = () => {
-    setScreen("ide");
-    voice.speak("I am switching to the code editor now. Follow each line as I explain it.");
-  };
-
-  const goSlides = () => {
-    setSlideIdx(0); setScreen("slides");
-    voice.speak(`Let us go back to the slides for ${mod?.title}.`);
-  };
+  // Manual controls remain available at any time and simply fast-forward the same flow.
+  const nextSlide = () => { if (mod) continueNow(slideIdx >= mod.slides.length - 1); };
+  const prevSlide = () => { clearCountdown(); setWaiting(false); voice.stopListening(); if (slideIdx > 0) setSlideIdx(s => s - 1); };
+  const goIDE = () => { clearCountdown(); setWaiting(false); voice.stopListening(); goIDEAuto(); };
+  const goSlides = () => { setSlideIdx(0); setScreen("slides"); voice.speak(`Let us go back to the slides for ${mod?.title}.`); };
 
   // ── Ask SEMAI ─────────────────────────────────────────────────────────────
-  const askSemai = useCallback((text) => {
-    const ctx = mod ? `Currently on: ${mod.title}, slide ${slideIdx+1}: ${mod.slides[slideIdx]?.title || "code demo"}.` : "";
+  const askSemai = (text) => {
+    const ctx = mod ? `Currently on: ${mod.title}, slide ${slideIdx+1}: ${mod.slides[slideIdx]?.title || "practical section"}.` : "";
     semai.ask(text, ctx);
     if (!chatOpen) setUnread(0);
-  }, [semai, mod, slideIdx, chatOpen]);
-
-  // ── Voice ask ─────────────────────────────────────────────────────────────
-  const handleVoiceAsk = () => {
-    voice.startListening(text => askSemai(text));
   };
 
-  // ── Raise hand ────────────────────────────────────────────────────────────
+  const handleVoiceAsk = () => voice.startListening(text => askSemai(text));
+
   const toggleHand = () => {
     const next = !raisedHand; setRaisedHand(next);
     if (next) { setHandMsg(`${studentName} raised their hand ✋`); setTimeout(()=>setHandMsg(""),5000); }
   };
 
-  // ── Quiz ──────────────────────────────────────────────────────────────────
   const quiz = () => {
+    clearCountdown(); setWaiting(false);
     setChatOpen(true); setUnread(0);
-    askSemai(`Give me a short quiz question about ${mod?.title || "Java"} based on what we have covered so far.`);
+    askSemai(`Give me a short quiz question about ${mod?.title || "this module"} based on what we have covered so far.`);
   };
+
+  const leaveNow = () => { clearCountdown(); voice.stopListening(); voice.stopSpeaking(); onLeave(); };
 
   if (!course) return (
     <div style={{ minHeight:"100vh", background:"#0F0C29", display:"flex", alignItems:"center", justifyContent:"center", color:"white", fontFamily:"system-ui" }}>
@@ -151,7 +206,7 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
           <span style={{ fontWeight:700, fontSize:13 }}>SEMAI — {course.title}</span>
           {mod && <span style={{ background:"#312E81", border:"1px solid #4338CA", borderRadius:20, padding:"1px 10px", fontSize:10, color:"#A5B4FC" }}>{mod.icon} {mod.title}</span>}
           {screen==="slides" && mod && <span style={{ fontSize:10, color:"#4B5563" }}>Slide {slideIdx+1}/{mod.slides.length}</span>}
-          {screen==="ide"    && <span style={{ fontSize:10, color:"#4B5563" }}>📂 Code Editor</span>}
+          {screen==="ide"    && <span style={{ fontSize:10, color:"#4B5563" }}>📂 Practical</span>}
         </div>
         <span style={{ color:"#4B5563", fontSize:12, fontFamily:"monospace", position:"absolute", left:"50%", transform:"translateX(-50%)" }}>{fmt(secs)}</span>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -164,6 +219,10 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
             </div>
           )}
           <span style={{ color:"#4B5563", fontSize:11 }}>👤 {studentName}</span>
+          <button onClick={()=>setAutoTeach(a=>!a)} title="When on, SEMAI advances the lecture on its own"
+            style={{ background:autoTeach?"#1E1B4B":"#374151", border:autoTeach?"1px solid #7C3AED":"none", borderRadius:7, padding:"5px 11px", color:autoTeach?"#A78BFA":"#9CA3AF", cursor:"pointer", fontSize:11 }}>
+            {autoTeach ? "▶ Auto" : "⏸ Manual"}
+          </button>
           <button onClick={()=>setDrawerOpen(o=>!o)}
             style={{ background:drawerOpen?"#7C3AED":"#374151", border:"none", borderRadius:7, padding:"5px 11px", color:"white", cursor:"pointer", fontSize:12 }}>
             ☰ Modules
@@ -178,10 +237,8 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
       {/* ── Body ───────────────────────────────────────────────────────────── */}
       <div style={{ flex:1, display:"flex", overflow:"hidden", position:"relative" }}>
 
-        {/* Drawer backdrop */}
         {drawerOpen && <div onClick={()=>setDrawerOpen(false)} style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.6)", zIndex:20, backdropFilter:"blur(1px)" }}/>}
 
-        {/* ── Module drawer ─────────────────────────────────────────────── */}
         {drawerOpen && (
           <div style={{ position:"absolute", top:0, left:0, bottom:0, width:240, background:"#161616", borderRight:"1px solid #2D2D2D", zIndex:25, overflowY:"auto", animation:"slideR 0.2s ease", boxShadow:"6px 0 24px rgba(0,0,0,0.6)" }}>
             <div style={{ padding:"12px 14px 8px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:"1px solid #2D2D2D" }}>
@@ -192,20 +249,17 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
               <button key={m.id} onClick={()=>startMod(m)}
                 style={{ width:"100%", textAlign:"left", padding:"11px 14px", background:mod?.id===m.id?"#1E1B4B":"none", border:"none", borderLeft:mod?.id===m.id?"3px solid #7C3AED":"3px solid transparent", color:mod?.id===m.id?"#A78BFA":"#9CA3AF", cursor:"pointer", fontSize:12, fontWeight:mod?.id===m.id?600:400, display:"flex", justifyContent:"space-between" }}>
                 <span><span style={{ marginRight:7 }}>{m.icon}</span>{m.title}</span>
-                {m.hours && <span style={{ fontSize:10, color:"#4B5563" }}>{m.hours}</span>}
               </button>
             ))}
           </div>
         )}
 
-        {/* ── Main screen — 100% clean, no tiles ───────────────────────── */}
         <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column" }}>
           <div style={{ flex:1, overflow:"hidden" }}>
 
-            {/* Welcome */}
             {screen==="welcome" && (
               <div style={{ width:"100%", height:"100%", background:"linear-gradient(145deg,#0F0C29,#1A1540)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20 }}>
-                <div style={{ width:80, height:80, borderRadius:22, background:"linear-gradient(135deg,#7C3AED,#4F46E5)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:40, boxShadow:"0 0 50px rgba(124,58,237,0.5)" }}>☕</div>
+                <div style={{ width:80, height:80, borderRadius:22, background:"linear-gradient(135deg,#7C3AED,#4F46E5)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:40, boxShadow:"0 0 50px rgba(124,58,237,0.5)" }}>🎓</div>
                 <div style={{ textAlign:"center" }}>
                   <h2 style={{ color:"white", fontSize:22, fontWeight:800, margin:"0 0 6px" }}>Welcome, {studentName}</h2>
                   <p style={{ color:"#A78BFA", fontSize:13, margin:"0 0 4px" }}>{course.title}</p>
@@ -220,12 +274,11 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
               </div>
             )}
 
-            {/* Module menu */}
             {screen==="menu" && (
               <div style={{ width:"100%", height:"100%", background:"#111", overflowY:"auto", display:"flex", flexDirection:"column", alignItems:"center", padding:"28px 20px", gap:16 }}>
                 <div style={{ textAlign:"center" }}>
                   <h3 style={{ color:"white", fontSize:16, fontWeight:700, margin:"0 0 4px" }}>Choose a module to begin</h3>
-                  <p style={{ color:"#6B7280", fontSize:12, margin:0 }}>SEMAI will guide you through slides then live code</p>
+                  <p style={{ color:"#6B7280", fontSize:12, margin:0 }}>SEMAI will guide you through slides then live practice — automatically</p>
                 </div>
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))", gap:12, width:"100%", maxWidth:680 }}>
                   {(course.modules || []).map(m => (
@@ -233,21 +286,19 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
                       style={{ background:"linear-gradient(145deg,#1A1A2E,#16213E)", border:"1px solid #2D2D4A", borderRadius:14, padding:"18px 16px", textAlign:"left", cursor:"pointer", color:"white" }}>
                       <div style={{ fontSize:26, marginBottom:10 }}>{m.icon}</div>
                       <div style={{ fontSize:13, fontWeight:600, color:"#E2E8F0", marginBottom:4 }}>{m.title}</div>
-                      {m.hours && <div style={{ fontSize:10, color:"#4B5563", marginBottom:4 }}>{m.hours}</div>}
-                      <div style={{ fontSize:10, color:"#374151" }}>{(m.slides||[]).length} slides + live code</div>
+                      <div style={{ fontSize:10, color:"#374151" }}>{(m.slides||[]).length} slides</div>
                     </button>
                   ))}
                 </div>
               </div>
             )}
 
-            {screen==="slides" && mod && <SlideScreen slide={mod.slides[slideIdx]} mod={mod} idx={slideIdx} total={mod.slides.length}/>}
+            {screen==="slides" && mod && <SlideScreen slide={mod.slides[slideIdx]} mod={mod} idx={slideIdx} total={mod.slides.length} courseTitle={course.title} institution={course.institution}/>}
             {screen==="ide"    && mod && <IDEScreen type={mod.practicalType} language={mod.practicalLanguage} content={mod.practical} note={mod.practicalNote} modTitle={mod.title} courseTag={course.id?.toUpperCase()}/>}
           </div>
 
-          {/* Slide / IDE nav */}
           {(screen==="slides"||screen==="ide") && mod && (
-            <div style={{ background:"#1A1A1A", borderTop:"1px solid #2D2D2D", padding:"8px 14px", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
+            <div style={{ background:"#1A1A1A", borderTop:"1px solid #2D2D2D", padding:"8px 14px", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0, flexWrap:"wrap", gap:6 }}>
               <div style={{ display:"flex", gap:6 }}>
                 {screen==="slides" && <>
                   <button onClick={prevSlide} disabled={slideIdx===0 || semai.preparing}
@@ -269,14 +320,13 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
               <div style={{ display:"flex", gap:6 }}>
                 <button onClick={()=>{ setChatOpen(true); setUnread(0); }}
                   style={{ background:"#1F2937", border:"1px solid #374151", borderRadius:7, padding:"6px 14px", color:"#9CA3AF", cursor:"pointer", fontSize:12 }}>💬 Q&A</button>
-                <button onClick={()=>{ setScreen("menu"); setMod(null); }}
+                <button onClick={()=>{ clearCountdown(); setWaiting(false); voice.stopListening(); setScreen("menu"); setMod(null); }}
                   style={{ background:"#1F2937", border:"1px solid #374151", borderRadius:7, padding:"6px 14px", color:"#9CA3AF", cursor:"pointer", fontSize:12 }}>All Modules</button>
               </div>
             </div>
           )}
         </div>
 
-        {/* Chat panel */}
         {chatOpen && (
           <ChatPanel
             messages={semai.messages}
@@ -289,8 +339,23 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
         )}
       </div>
 
+      {/* Understanding check-in — SEMAI pauses here after every slide when Auto is on */}
+      {waiting && (
+        <div style={{ position:"fixed", bottom:toolbarHeight()+8, left:"50%", transform:"translateX(-50%)", background:"rgba(9,9,20,0.95)", border:"1px solid #7C3AED", borderRadius:14, padding:"12px 18px", zIndex:55, display:"flex", flexDirection:"column", alignItems:"center", gap:8, maxWidth:"80%", animation:"fadeIn 0.25s ease" }}>
+          <span style={{ fontSize:12.5, color:"#E2E8F0", textAlign:"center" }}>
+            Did that make sense, {studentName}? Continuing in {countdown}s{voice.listening ? " · listening…" : ""}
+          </span>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={()=>continueNow(slideIdx >= (mod?.slides.length ?? 1) - 1)}
+              style={{ background:"#7C3AED", border:"none", borderRadius:8, padding:"6px 14px", color:"white", cursor:"pointer", fontSize:12, fontWeight:600 }}>▶ Continue now</button>
+            <button onClick={pauseForQuestion}
+              style={{ background:"#1F2937", border:"1px solid #374151", borderRadius:8, padding:"6px 14px", color:"#9CA3AF", cursor:"pointer", fontSize:12 }}>❓ I have a question</button>
+          </div>
+        </div>
+      )}
+
       {/* Preparing indicator — shown while SEMAI composes the full explanation before speaking */}
-      {semai.preparing && !voice.speaking && (
+      {semai.preparing && !voice.speaking && !waiting && (
         <div style={{ position:"fixed", bottom:toolbarHeight()+8, left:"50%", transform:"translateX(-50%)", background:"rgba(9,9,20,0.92)", border:"1px solid #7C3AED", borderRadius:12, padding:"10px 20px", zIndex:50, display:"flex", alignItems:"center", gap:10, pointerEvents:"none" }}>
           <div style={{ width:14, height:14, borderRadius:"50%", border:"2px solid #7C3AED", borderTopColor:"transparent", animation:"spin 0.8s linear infinite" }}/>
           <span style={{ fontSize:12.5, color:"#A78BFA", fontStyle:"italic" }}>SEMAI is preparing the explanation…</span>
@@ -307,7 +372,6 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
         </div>
       )}
 
-      {/* Hand banner */}
       {handMsg && (
         <div style={{ position:"fixed", top:56, left:"50%", transform:"translateX(-50%)", background:"#422006", border:"1px solid #D97706", borderRadius:20, padding:"5px 18px", fontSize:12, color:"#FCD34D", zIndex:40, whiteSpace:"nowrap" }}>
           {handMsg}
@@ -326,7 +390,7 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
         chatOpen={chatOpen}          onToggleChat={()=>{ setChatOpen(o=>!o); setUnread(0); }}
         unread={unread}
         onQuiz={quiz}
-        onLeave={onLeave}
+        onLeave={leaveNow}
       />
     </div>
   );

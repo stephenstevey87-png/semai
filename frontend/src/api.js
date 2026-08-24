@@ -10,9 +10,9 @@ export async function sendChat({ messages, courseId, studentName, context }) {
   return data; // { reply: "..." }
 }
 
-export async function explainSlide({ courseTitle, moduleTitle, studentName, slideTitle, bullets }) {
+export async function explainSlide({ courseTitle, moduleTitle, studentName, slideTitle, slideSubtitle, highlight, bullets }) {
   const { data, error } = await supabase.functions.invoke("explain-slide", {
-    body: { courseTitle, moduleTitle, studentName, slideTitle, bullets },
+    body: { courseTitle, moduleTitle, studentName, slideTitle, slideSubtitle, highlight, bullets },
   });
   if (error) throw new Error(error.message || "Explain request failed");
   if (data?.error) throw new Error(data.error);
@@ -67,7 +67,7 @@ export async function getCourse(id) {
     lecturer: course.lecturer_name || "", institution: course.institution || "",
     modules: (modules || []).map(m => ({
       id: m.id, icon: m.icon, title: m.title,
-      slides: (slidesByModule[m.id] || []).map(s => ({ title: s.title, bullets: s.bullets })),
+      slides: (slidesByModule[m.id] || []).map(s => ({ title: s.title, subtitle: s.subtitle || "", bullets: s.bullets, highlight: s.highlight || "" })),
       practicalType: m.practical_type, practicalLanguage: m.practical_language,
       practical: m.practical, practicalNote: m.practical_note,
     })),
@@ -112,7 +112,8 @@ export async function saveCourse(course) {
     if (modErr) throw new Error(modErr.message);
 
     const slideRows = (m.slides || []).map((s, j) => ({
-      module_id: modRow.id, position: j, title: s.title || "", bullets: s.bullets || [],
+      module_id: modRow.id, position: j, title: s.title || "",
+      subtitle: s.subtitle || "", bullets: s.bullets || [], highlight: s.highlight || "",
     }));
     if (slideRows.length) {
       const { error: slideErr } = await supabase.from("slides").insert(slideRows);
