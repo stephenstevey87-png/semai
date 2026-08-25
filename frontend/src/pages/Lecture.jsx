@@ -24,8 +24,9 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
 
   // ── Autonomous lecture flow ────────────────────────────────────────────
   const [autoTeach, setAutoTeach] = useState(true);   // when on, SEMAI drives itself through the lecture
-  const [waiting,   setWaiting]   = useState(false);   // true while SEMAI is checking the student understood
+  const [waiting,   setWaiting]   = useState(false);   // true while genuinely waiting for the student's answer
   const [countdown, setCountdown] = useState(0);
+  const [checkInText, setCheckInText] = useState(""); // the actual question SEMAI just asked out loud
 
   const voice = useVoice();
   const semai = useSEMAI({ courseId, studentName, speak: voice.speak });
@@ -58,20 +59,34 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
     }
   }, [semai.messages]);
 
-  // Teach one slide, then — if auto-teach is on — check the student actually understood before moving on.
+  // Teach one slide, then — if auto-teach is on — genuinely check the student understood before
+  // moving on. The explanation and the check-in question are spoken as TWO separate utterances
+  // (not one long one) so the question is guaranteed to be heard even if it were ever affected by
+  // anything during the main explanation, and so the wait below only starts once SEMAI has actually
+  // finished asking, not while still mid-explanation.
   const teach = (moduleTitle, slide, isLast) => {
     semai.teachSlide({
       courseTitle: courseRef.current?.title, moduleTitle,
       slideTitle: slide.title, slideSubtitle: slide.subtitle, highlight: slide.highlight,
       bullets: slide.bullets,
-    }, () => {
-      if (autoTeachRef.current) beginCheckIn(isLast);
+    }, (checkInQuestion) => {
+      if (autoTeachRef.current) beginCheckIn(isLast, checkInQuestion);
     });
   };
 
-  const beginCheckIn = (isLast) => {
+  const beginCheckIn = (isLast, checkInQuestion) => {
+    const question = checkInQuestion || "Does that make sense so far?";
+    setCheckInText(question);
+    voice.speak(question, () => startWaitingForResponse(isLast));
+  };
+
+  // The real wait: SEMAI has just finished asking out loud, and now actually listens for the
+  // student's answer. A generous window (25s) since this is a real question deserving a real
+  // answer, not a rushed pause — the countdown is a safety net for when voice input isn't
+  // available, not the primary way this is meant to resolve.
+  const startWaitingForResponse = (isLast) => {
     setWaiting(true);
-    setCountdown(8);
+    setCountdown(25);
     clearCountdown();
     countdownTimer.current = setInterval(() => {
       setCountdown(c => {
@@ -79,13 +94,12 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
         return c - 1;
       });
     }, 1000);
-    // Best-effort: if the mic is on, listen for a spoken "yes"/question during the check-in window.
     if (!voice.micMuted) voice.startListening(transcript => handleCheckInSpeech(transcript, isLast), { silent: true });
   };
 
   const handleCheckInSpeech = (transcript, isLast) => {
     const t = transcript.toLowerCase().trim();
-    const continueWords = ["yes","yeah","yep","okay","ok","continue","next","understood","got it","ready","move on","i understand","sure","fine","good","makes sense"];
+    const continueWords = ["yes","yeah","yep","okay","ok","continue","next","understood","got it","ready","move on","i understand","sure","fine","good","makes sense","no questions","all good"];
     if (t.length < 40 && continueWords.some(w => t.includes(w))) {
       continueNow(isLast);
     } else {
@@ -341,13 +355,16 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
 
       {/* Understanding check-in — SEMAI pauses here after every slide when Auto is on */}
       {waiting && (
-        <div style={{ position:"fixed", bottom:toolbarHeight()+8, left:"50%", transform:"translateX(-50%)", background:"rgba(9,9,20,0.95)", border:"1px solid #7C3AED", borderRadius:14, padding:"12px 18px", zIndex:55, display:"flex", flexDirection:"column", alignItems:"center", gap:8, maxWidth:"80%", animation:"fadeIn 0.25s ease" }}>
-          <span style={{ fontSize:12.5, color:"#E2E8F0", textAlign:"center" }}>
-            Did that make sense, {studentName}? Continuing in {countdown}s{voice.listening ? " · listening…" : ""}
+        <div style={{ position:"fixed", bottom:toolbarHeight()+8, left:"50%", transform:"translateX(-50%)", background:"rgba(9,9,20,0.95)", border:"1px solid #7C3AED", borderRadius:14, padding:"14px 20px", zIndex:55, display:"flex", flexDirection:"column", alignItems:"center", gap:9, maxWidth:"80%", animation:"fadeIn 0.25s ease" }}>
+          <span style={{ fontSize:13, color:"#E2E8F0", textAlign:"center", fontStyle:"italic", lineHeight:1.5 }}>"{checkInText}"</span>
+          <span style={{ fontSize:11, color:"#7C7C9C", display:"flex", alignItems:"center", gap:6 }}>
+            {voice.listening
+              ? <><span style={{ width:6, height:6, borderRadius:"50%", background:"#EF4444", animation:"pulse 1s infinite" }}/>Listening for your answer, {studentName}…</>
+              : <>Waiting {countdown}s — say something, or use a button below</>}
           </span>
           <div style={{ display:"flex", gap:8 }}>
             <button onClick={()=>continueNow(slideIdx >= (mod?.slides.length ?? 1) - 1)}
-              style={{ background:"#7C3AED", border:"none", borderRadius:8, padding:"6px 14px", color:"white", cursor:"pointer", fontSize:12, fontWeight:600 }}>▶ Continue now</button>
+              style={{ background:"#7C3AED", border:"none", borderRadius:8, padding:"6px 14px", color:"white", cursor:"pointer", fontSize:12, fontWeight:600 }}>▶ No questions, continue</button>
             <button onClick={pauseForQuestion}
               style={{ background:"#1F2937", border:"1px solid #374151", borderRadius:8, padding:"6px 14px", color:"#9CA3AF", cursor:"pointer", fontSize:12 }}>❓ I have a question</button>
           </div>

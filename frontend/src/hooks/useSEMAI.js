@@ -7,13 +7,16 @@ export function useSEMAI({ courseId, studentName, speak }) {
   const [preparing, setPreparing] = useState(false); // true while SEMAI composes a full slide explanation
 
   // Full lecturer-style explanation of a slide — teaches every bullet, not just reads it.
+  // onDone receives the content-specific check-in question so the caller can speak it
+  // separately, AFTER the full explanation has genuinely finished playing.
   const teachSlide = useCallback(async ({ courseTitle, moduleTitle, slideTitle, slideSubtitle, highlight, bullets }, onDone) => {
     setPreparing(true);
     try {
       const data = await explainSlide({ courseTitle, moduleTitle, studentName, slideTitle, slideSubtitle, highlight, bullets });
-      speak(data.explanation, onDone);
+      speak(data.explanation, () => onDone?.(data.checkInQuestion));
     } catch {
-      speak(`Let's look at ${slideTitle}. ${bullets.join(". ")}.`, onDone); // graceful fallback
+      // Graceful fallback if the Edge Function call fails entirely.
+      speak(`Let's look at ${slideTitle}. ${bullets.join(". ")}.`, () => onDone?.("Does that make sense so far?"));
     } finally {
       setPreparing(false);
     }

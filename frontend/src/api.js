@@ -16,7 +16,7 @@ export async function explainSlide({ courseTitle, moduleTitle, studentName, slid
   });
   if (error) throw new Error(error.message || "Explain request failed");
   if (data?.error) throw new Error(data.error);
-  return data; // { explanation: "..." }
+  return data; // { explanation: "...", checkInQuestion: "..." }
 }
 
 export async function generateCourse({ title, lecturer, institution, sourceText }) {

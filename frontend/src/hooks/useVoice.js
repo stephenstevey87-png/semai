@@ -25,7 +25,7 @@ function cleanForSpeech(text) {
     .replace(/[*_~#\[\]>]/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  // NOTE: no length truncation here — a full slide explanation runs ~150-260 words,
+  // NOTE: no length truncation here — a full slide explanation runs ~180-320 words,
   // and cutting it short is exactly what caused SEMAI to stop mid-explanation.
 }
 
@@ -71,6 +71,28 @@ export function useVoice() {
   const [micMuted,  setMicMuted]  = useState(false);
   const recogRef = useRef(null);
   const speechIdRef = useRef(0); // guards against a stale queue firing callbacks after cancel()/a newer speak()
+  const keepAliveRef = useRef(null);
+
+  // Chrome (desktop and Android) has a long-standing bug where speechSynthesis silently
+  // stalls once the TOTAL queued speech duration passes roughly 15 seconds — the engine
+  // just stops, with no error and no onend ever firing on the remaining queued utterances.
+  // Sentence-chunking alone (above) doesn't fix this, since the bug is about cumulative
+  // session time, not individual utterance length. Periodically nudging the engine with
+  // pause()+resume() resets its internal timer and keeps long explanations playing to the
+  // end. This is a harmless no-op on browsers that don't have the bug.
+  const startKeepAlive = () => {
+    stopKeepAlive();
+    keepAliveRef.current = setInterval(() => {
+      if (window.speechSynthesis?.speaking) {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      }
+    }, 12000);
+  };
+  const stopKeepAlive = () => {
+    if (keepAliveRef.current) { clearInterval(keepAliveRef.current); keepAliveRef.current = null; }
+  };
+  useEffect(() => () => stopKeepAlive(), []);
 
   // Pre-load voices on mount
   useEffect(() => {
@@ -92,6 +114,7 @@ export function useVoice() {
       if (speechIdRef.current !== mySpeechId) return; // superseded by a newer speak() call
       const voice = pickVoice();
       setSpeaking(true);
+      startKeepAlive();
       chunks.forEach((chunk, i) => {
         const utt = new SpeechSynthesisUtterance(chunk);
         utt.rate   = 0.98;
@@ -105,11 +128,11 @@ export function useVoice() {
         const isLast = i === chunks.length - 1;
         utt.onend = () => {
           if (speechIdRef.current !== mySpeechId) return;
-          if (isLast) { setSpeaking(false); setCaption(""); onDone?.(); }
+          if (isLast) { stopKeepAlive(); setSpeaking(false); setCaption(""); onDone?.(); }
         };
         utt.onerror = () => {
           if (speechIdRef.current !== mySpeechId) return;
-          if (isLast) { setSpeaking(false); setCaption(""); onDone?.(); }
+          if (isLast) { stopKeepAlive(); setSpeaking(false); setCaption(""); onDone?.(); }
         };
         window.speechSynthesis.speak(utt);
       });
@@ -121,13 +144,14 @@ export function useVoice() {
 
   const stopSpeaking = useCallback(() => {
     speechIdRef.current++; // invalidate any in-flight queued callbacks
+    stopKeepAlive();
     window.speechSynthesis?.cancel();
     setSpeaking(false);
     setCaption("");
   }, []);
 
   const toggleAudio = useCallback(() => {
-    setAudioOn(on => { if (on) { speechIdRef.current++; window.speechSynthesis?.cancel(); } return !on; });
+    setAudioOn(on => { if (on) { speechIdRef.current++; stopKeepAlive(); window.speechSynthesis?.cancel(); } return !on; });
   }, []);
 
   // ── Speech recognition ────────────────────────────────────────────────────
