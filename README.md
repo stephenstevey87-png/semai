@@ -1,14 +1,15 @@
 # SEMAI — AI Lecturer
 **By Ssemambo Steven · SayMyTech Developers**
 
-A full PWA that automatically teaches any course — programming, business, science, law,
-anything — to your students when you're not around. Any lecturer can sign in, paste a
-course/module outline, and SEMAI generates the slides, notes, and hands-on exercises,
-then delivers the lecture hands-free with live voice narration.
+A full multi-tenant PWA that automatically teaches any course — programming, business,
+science, law, anything — to your students when you're not around. Any institution can
+register its own isolated space; its lecturers sign in, paste a course/module outline,
+and SEMAI generates the slides, notes, and hands-on exercises, then delivers the lecture
+hands-free with live voice narration.
 
-Gemini AI brain · Browser voice · Slide + practical-screen switching · Multi-lecturer
-Supabase backend (database, auth, and Edge Functions) · Autonomous "teach → check-in →
-advance" flow
+Gemini AI brain · Browser voice · Slide + practical-screen switching · Multi-institution
+Supabase backend (database, auth, and Edge Functions) with real student accounts and an
+institution admin dashboard · Autonomous "teach → check-in → advance" flow
 
 ---
 
@@ -117,20 +118,36 @@ their own courses.**
 
 ---
 
-## Step 4 — Add a course as a lecturer
+## Step 4 — Register your institution
 
-1. Open SEMAI → **⚙️ Admin** → create a lecturer account (email + password)
-   - Supabase emails a confirmation link — confirm, then sign in
-2. **✨ Add a Course Unit** → paste your notes/outline (or upload a `.txt` file), or just
-   describe the topics
-3. **Generate Course** → review the preview → **Save Course**
-4. It immediately appears as a new option on the Join screen for every student — works
-   for any subject; SEMAI decides per module whether to show a code editor (programming
-   subjects) or a worked-example panel (everything else)
+SEMAI is multi-tenant: each university/school is its own isolated space — its course
+catalog and student roster are only visible to its own people, not shared globally.
 
-Every lecturer who signs up can add their own courses. Everyone sees everyone's courses
-on the Join screen; a lecturer can only edit/delete the units they created themselves —
-enforced by the database, not just hidden in the UI.
+1. Open SEMAI → **Lecturer or administrator? Sign in here** → **Register new institution**
+2. Enter your institution's name, your own name, email, and password → **Create Account**
+3. Confirm your email, then sign in — you're now that institution's **institution_admin**,
+   with a **🏛 Institution Dashboard** tab showing every lecturer, course, and student at
+   your institution, plus real completion data as students progress through lectures
+
+## Step 5 — Add lecturers and courses
+
+- Other lecturers at your institution sign up via **Join my institution** (same screen),
+  picking your institution from the dropdown — no admin approval step needed
+- Any lecturer (including the institution_admin) can then **✨ Add a Course Unit**: paste
+  notes/outline (or upload a `.txt` file), or just describe the topics
+- **Generate Course** → review the preview → **Save Course** — it immediately appears on
+  the Join screen for every student at that institution; SEMAI decides per module whether
+  to show a code editor (programming subjects) or a worked-example panel (everything else)
+- A lecturer can only edit/delete the units they created themselves — enforced by the
+  database (Row Level Security), not just hidden in the UI
+
+## Step 6 — Students join
+
+- Students sign up on the main Join screen with their own name, email, password, and their
+  institution (picked from the same dropdown) — real accounts, not name-only entry
+- Once signed in, they see only their own institution's courses and can join any lecture
+- Progress (which modules they've completed) is recorded automatically and shows up on the
+  institution_admin's dashboard
 
 ---
 

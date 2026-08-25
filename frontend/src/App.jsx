@@ -7,17 +7,19 @@ export default function App() {
   const [page,        setPage]        = useState("join");   // join | lecture | admin
   const [prevPage,     setPrevPage]    = useState("join");   // where to return to after Admin
   const [studentName, setStudentName] = useState("");
+  const [studentId,   setStudentId]   = useState("");
   const [courseId,    setCourseId]    = useState("");
 
-  const join = (name, cid) => {
+  const join = (name, cid, sid) => {
     setStudentName(name);
     setCourseId(cid);
+    setStudentId(sid);
     setPage("lecture");
   };
 
-  // Admin is reachable both before joining (from the Join screen, for a lecturer who
-  // hasn't started a lecture session) and during a lecture (from its header button) —
-  // remember which one so "Back" returns somewhere that actually makes sense.
+  // Admin is reachable both before joining (from the Join screen, for staff who haven't
+  // started a lecture session) and during a lecture (from its header button) — remember
+  // which one so "Back" returns somewhere that actually makes sense.
   const goAdmin = () => { setPrevPage(page); setPage("admin"); };
 
   if (page === "join")    return <Join    onJoin={join} onAdmin={goAdmin}/>;
@@ -25,6 +27,7 @@ export default function App() {
   if (page === "lecture") return (
     <Lecture
       studentName={studentName}
+      studentId={studentId}
       courseId={courseId}
       onLeave={()=>setPage("join")}
       onAdmin={goAdmin}

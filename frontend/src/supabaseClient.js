@@ -38,34 +38,38 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ── Lecturer auth helpers ────────────────────────────────────────────────────
-export async function signUpLecturer({ email, password, name, institution }) {
+// ── Auth helpers — shared by lecturers, students, and institution admins ─────────
+// role: 'lecturer' | 'student' | 'institution_admin'
+// Pass institutionId to join an existing institution, OR newInstitutionName to register
+// a brand-new one (which always makes the signing-up user its institution_admin — see
+// the handle_new_user() trigger in supabase/schema.sql).
+export async function signUpUser({ email, password, name, role, institutionId, newInstitutionName }) {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { name, institution } }, // read by the handle_new_user() trigger in schema.sql
+    options: { data: { name, role, institutionId, newInstitutionName } },
   });
   if (error) throw error;
   return data;
 }
 
-export async function signInLecturer({ email, password }) {
+export async function signInUser({ email, password }) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw error;
   return data;
 }
 
-export async function signOutLecturer() {
+export async function signOutUser() {
   await supabase.auth.signOut();
 }
 
-export async function getLecturerSession() {
+export async function getCurrentSession() {
   const { data } = await supabase.auth.getSession();
   return data.session; // null if not signed in
 }
 
-export async function getLecturerProfile(userId) {
-  const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).single();
+export async function getUserProfile(userId) {
+  const { data, error } = await supabase.from("profiles").select("*, institutions(name)").eq("id", userId).single();
   if (error) return null;
-  return data; // { id, name, institution }
+  return data; // { id, name, role, institution_id, institutions: { name } }
 }

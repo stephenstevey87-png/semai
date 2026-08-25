@@ -91,6 +91,12 @@ export async function saveCourse(course) {
 
   const courseId = course.id || slugify(course.title);
 
+  // New courses inherit the lecturer's institution automatically — this is what keeps a
+  // university's course catalog scoped to its own students (see institution-scoped RLS
+  // policies in supabase/schema.sql). A lecturer with no institution_id (a legacy/independent
+  // account) still saves fine; that course just stays visible campus-wide as before.
+  const { data: profile } = await supabase.from("profiles").select("institution_id").eq("id", session.user.id).single();
+
   const { error: courseErr } = await supabase.from("courses").upsert({
     id: courseId,
     title: course.title,
@@ -100,6 +106,7 @@ export async function saveCourse(course) {
     lecturer_id: session.user.id,
     lecturer_name: course.lecturer || session.user.email,
     institution: course.institution || "",
+    institution_id: profile?.institution_id || null,
   });
   if (courseErr) throw new Error(courseErr.message);
 
@@ -141,4 +148,48 @@ export async function deleteCourse(id) {
 
 function slugify(text) {
   return (text || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+// ── Institutions ────────────────────────────────────────────────────────────────
+export async function listInstitutions() {
+  const { data, error } = await supabase.from("institutions").select("id, name").order("name");
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+// Oversight view for an institution_admin: their lecturers, their course catalog, their
+// registered students, and how many modules each student has actually completed.
+export async function getInstitutionDashboard(institutionId) {
+  const [{ data: lecturers }, { data: students }, { data: courses }] = await Promise.all([
+    supabase.from("profiles").select("id, name, created_at").eq("institution_id", institutionId).eq("role", "lecturer").order("name"),
+    supabase.from("profiles").select("id, name, created_at").eq("institution_id", institutionId).eq("role", "student").order("name"),
+    supabase.from("courses").select("id, title, subject, lecturer_name").eq("institution_id", institutionId).order("title"),
+  ]);
+
+  const courseIds = (courses || []).map(c => c.id);
+  const { data: progressRows } = courseIds.length
+    ? await supabase.from("progress").select("student_id, course_id, completed").in("course_id", courseIds)
+    : { data: [] };
+
+  const completedByStudent = {};
+  for (const r of progressRows || []) {
+    if (!r.completed) continue;
+    completedByStudent[r.student_id] = (completedByStudent[r.student_id] || 0) + 1;
+  }
+
+  return {
+    lecturers: lecturers || [],
+    courses: courses || [],
+    students: (students || []).map(s => ({ ...s, modulesCompleted: completedByStudent[s.id] || 0 })),
+  };
+}
+
+// ── Progress — lets an institution_admin/lecturer see real student activity ──────
+export async function recordProgress({ studentId, courseId, moduleId, completed }) {
+  if (!studentId) return; // anonymous/legacy sessions have nothing to attribute progress to
+  const { error } = await supabase.from("progress").upsert(
+    { student_id: studentId, course_id: courseId, module_id: moduleId, completed, updated_at: new Date().toISOString() },
+    { onConflict: "student_id,course_id,module_id" },
+  );
+  if (error) console.error("recordProgress failed:", error.message); // best-effort, never blocks the lecture
 }

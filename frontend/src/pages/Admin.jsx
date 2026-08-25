@@ -1,17 +1,19 @@
 import { useState, useEffect, useRef } from "react";
-import { getCourses, deleteCourse, saveCourse, generateCourse } from "../api";
-import { supabase, signUpLecturer, signInLecturer, signOutLecturer, getLecturerProfile } from "../supabaseClient";
+import { getCourses, deleteCourse, saveCourse, generateCourse, listInstitutions, getInstitutionDashboard } from "../api";
+import { supabase, signUpUser, signInUser, signOutUser, getUserProfile } from "../supabaseClient";
 
 export default function Admin({ onBack }) {
   const [session, setSession] = useState(undefined); // undefined = loading, null = signed out
   const [profile, setProfile] = useState(null);
   const [authMode, setAuthMode] = useState("signin"); // signin | signup
-  const [authForm, setAuthForm] = useState({ email:"", password:"", name:"", institution:"" });
+  const [signupKind, setSignupKind] = useState("join"); // join (existing institution, as lecturer) | register (new institution, becomes admin)
+  const [institutions, setInstitutions] = useState([]);
+  const [authForm, setAuthForm] = useState({ email:"", password:"", name:"", institutionId:"", newInstitutionName:"" });
   const [authStatus, setAuthStatus] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
   const [courses, setCourses] = useState([]);
-  const [tab, setTab] = useState("list"); // list | generate
+  const [tab, setTab] = useState("list"); // list | generate | institution
 
   const [genForm, setGenForm] = useState({ title:"", lecturer:"", institution:"", sourceText:"" });
   const [genStatus, setGenStatus] = useState("");
@@ -19,6 +21,9 @@ export default function Admin({ onBack }) {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [preview, setPreview] = useState(null);
   const fileInputRef = useRef(null);
+
+  const [dash, setDash] = useState(null); // institution dashboard data
+  const [dashLoading, setDashLoading] = useState(false);
 
   // ── Auth session ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -28,10 +33,14 @@ export default function Admin({ onBack }) {
   }, []);
 
   useEffect(() => {
+    if (!session) { listInstitutions().then(setInstitutions).catch(()=>{}); }
+  }, [session]);
+
+  useEffect(() => {
     if (session?.user) {
-      getLecturerProfile(session.user.id).then(p => {
+      getUserProfile(session.user.id).then(p => {
         setProfile(p);
-        if (p) setGenForm(f => ({ ...f, lecturer: p.name, institution: p.institution || "" }));
+        if (p) setGenForm(f => ({ ...f, lecturer: p.name, institution: p.institutions?.name || "" }));
       });
     } else {
       setProfile(null);
@@ -41,16 +50,30 @@ export default function Admin({ onBack }) {
   const load = () => getCourses().then(d => setCourses(d.courses || []));
   useEffect(() => { if (session) load(); }, [session]);
 
+  useEffect(() => {
+    if (profile?.role === "institution_admin" && profile.institution_id && tab === "institution") {
+      setDashLoading(true);
+      getInstitutionDashboard(profile.institution_id).then(setDash).catch(()=>{}).finally(()=>setDashLoading(false));
+    }
+  }, [profile, tab]);
+
   const submitAuth = async () => {
     setAuthLoading(true); setAuthStatus("");
     try {
       if (authMode === "signup") {
         if (!authForm.name.trim()) throw new Error("Name is required.");
-        await signUpLecturer(authForm);
+        if (signupKind === "join" && !authForm.institutionId) throw new Error("Please select your institution.");
+        if (signupKind === "register" && !authForm.newInstitutionName.trim()) throw new Error("Institution name is required.");
+        await signUpUser({
+          email: authForm.email, password: authForm.password, name: authForm.name,
+          role: "lecturer",
+          institutionId: signupKind === "join" ? authForm.institutionId : undefined,
+          newInstitutionName: signupKind === "register" ? authForm.newInstitutionName.trim() : undefined,
+        });
         setAuthStatus("✅ Account created! Check your email to confirm, then sign in.");
         setAuthMode("signin");
       } else {
-        await signInLecturer(authForm);
+        await signInUser(authForm);
       }
     } catch (err) {
       setAuthStatus(`❌ ${err.message || "Something went wrong."}`);
@@ -58,7 +81,7 @@ export default function Admin({ onBack }) {
     setAuthLoading(false);
   };
 
-  const signOut = async () => { await signOutLecturer(); };
+  const signOut = async () => { await signOutUser(); };
 
   const del = async (id) => {
     if (!confirm("Delete this course? This removes it for everyone using the app.")) return;
@@ -109,7 +132,7 @@ export default function Admin({ onBack }) {
     setGenLoading(true);
     try {
       await saveCourse({ title: genForm.title, ...preview });
-      setGenStatus("✅ Course unit saved! It's now available to every student on the Join screen.");
+      setGenStatus("✅ Course unit saved! It's now available to your institution's students on the Join screen.");
       setPreview(null);
       setGenForm(f => ({ title:"", lecturer:f.lecturer, institution:f.institution, sourceText:"" }));
       load();
@@ -129,23 +152,52 @@ export default function Admin({ onBack }) {
   if (!session) {
     return (
       <div style={{ minHeight:"100vh", background:"#0F0C29", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Segoe UI',system-ui,sans-serif" }}>
-        <div style={{ width:"90%", maxWidth:380, padding:20 }}>
+        <div style={{ width:"90%", maxWidth:400, padding:20 }}>
           <div style={{ textAlign:"center", marginBottom:20 }}>
             <div style={{ width:64, height:64, borderRadius:18, background:"linear-gradient(135deg,#7C3AED,#4F46E5)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 14px" }}>🎓</div>
-            <h2 style={{ color:"white", fontSize:20, fontWeight:800, margin:"0 0 4px" }}>Lecturer {authMode === "signup" ? "Sign Up" : "Sign In"}</h2>
-            <p style={{ color:"#6B7280", fontSize:12, margin:0 }}>Any subject welcome — programming, business, science, law, and more.</p>
+            <h2 style={{ color:"white", fontSize:20, fontWeight:800, margin:"0 0 4px" }}>Staff {authMode === "signup" ? "Sign Up" : "Sign In"}</h2>
+            <p style={{ color:"#6B7280", fontSize:12, margin:0 }}>For lecturers and institution administrators.</p>
           </div>
           <div style={{ background:"#1A1640", borderRadius:16, padding:22, border:"1px solid #2D2757" }}>
             {authMode === "signup" && (
               <>
+                <div style={{ display:"flex", gap:6, marginBottom:14, background:"#0F0C29", borderRadius:10, padding:3 }}>
+                  <button onClick={()=>setSignupKind("join")}
+                    style={{ flex:1, padding:"8px", borderRadius:8, border:"none", background:signupKind==="join"?"#7C3AED":"transparent", color:signupKind==="join"?"white":"#6B7280", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                    Join my institution
+                  </button>
+                  <button onClick={()=>setSignupKind("register")}
+                    style={{ flex:1, padding:"8px", borderRadius:8, border:"none", background:signupKind==="register"?"#7C3AED":"transparent", color:signupKind==="register"?"white":"#6B7280", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                    Register new institution
+                  </button>
+                </div>
+
                 <label style={{ display:"block", color:"#6B7280", fontSize:11, marginBottom:4 }}>YOUR NAME *</label>
                 <input value={authForm.name} onChange={e=>setAuthForm(f=>({...f,name:e.target.value}))}
                   placeholder="e.g. Ssemambo Steven"
                   style={{ width:"100%", padding:"11px 14px", borderRadius:10, border:"1px solid #3730A3", background:"#0F0C29", color:"white", fontSize:14, marginBottom:12, boxSizing:"border-box" }}/>
-                <label style={{ display:"block", color:"#6B7280", fontSize:11, marginBottom:4 }}>INSTITUTION</label>
-                <input value={authForm.institution} onChange={e=>setAuthForm(f=>({...f,institution:e.target.value}))}
-                  placeholder="e.g. Makerere University Business School"
-                  style={{ width:"100%", padding:"11px 14px", borderRadius:10, border:"1px solid #3730A3", background:"#0F0C29", color:"white", fontSize:14, marginBottom:12, boxSizing:"border-box" }}/>
+
+                {signupKind === "join" ? (
+                  <>
+                    <label style={{ display:"block", color:"#6B7280", fontSize:11, marginBottom:4 }}>INSTITUTION *</label>
+                    <select value={authForm.institutionId} onChange={e=>setAuthForm(f=>({...f,institutionId:e.target.value}))}
+                      style={{ width:"100%", padding:"11px 14px", borderRadius:10, border:"1px solid #3730A3", background:"#0F0C29", color:"white", fontSize:13, marginBottom:12, boxSizing:"border-box" }}>
+                      <option value="">Select your institution…</option>
+                      {institutions.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                    </select>
+                    {institutions.length === 0 && (
+                      <p style={{ color:"#4B5563", fontSize:11, margin:"-6px 0 12px" }}>No institutions registered yet — use "Register new institution" above if you're the first from your school.</p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <label style={{ display:"block", color:"#6B7280", fontSize:11, marginBottom:4 }}>INSTITUTION NAME *</label>
+                    <input value={authForm.newInstitutionName} onChange={e=>setAuthForm(f=>({...f,newInstitutionName:e.target.value}))}
+                      placeholder="e.g. Makerere University"
+                      style={{ width:"100%", padding:"11px 14px", borderRadius:10, border:"1px solid #3730A3", background:"#0F0C29", color:"white", fontSize:14, marginBottom:6, boxSizing:"border-box" }}/>
+                    <p style={{ color:"#4B5563", fontSize:11, margin:"0 0 12px" }}>You'll become this institution's administrator, overseeing its lecturers, courses, and students.</p>
+                  </>
+                )}
               </>
             )}
             <label style={{ display:"block", color:"#6B7280", fontSize:11, marginBottom:4 }}>EMAIL *</label>
@@ -166,7 +218,7 @@ export default function Admin({ onBack }) {
 
             <button onClick={()=>{ setAuthMode(m=>m==="signup"?"signin":"signup"); setAuthStatus(""); }}
               style={{ width:"100%", background:"none", border:"none", color:"#6B7280", fontSize:12, cursor:"pointer" }}>
-              {authMode === "signup" ? "Already have an account? Sign in" : "New here? Create a lecturer account"}
+              {authMode === "signup" ? "Already have an account? Sign in" : "New here? Create a staff account"}
             </button>
           </div>
           <button onClick={onBack} style={{ display:"block", margin:"14px auto 0", background:"none", border:"none", color:"#4B5563", fontSize:12, cursor:"pointer" }}>← Back</button>
@@ -177,6 +229,8 @@ export default function Admin({ onBack }) {
 
   // ── Signed in ────────────────────────────────────────────────────────────
   const displayName = profile?.name || session.user.email;
+  const isAdmin = profile?.role === "institution_admin";
+  const tabs = isAdmin ? ["list","generate","institution"] : ["list","generate"];
 
   return (
     <div style={{ minHeight:"100vh", background:"#0F0C29", fontFamily:"'Segoe UI',system-ui,sans-serif", color:"white" }}>
@@ -184,7 +238,8 @@ export default function Admin({ onBack }) {
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <span style={{ fontSize:20 }}>🎓</span>
           <span style={{ fontWeight:700, fontSize:15 }}>SEMAI Admin</span>
-          <span style={{ color:"#4B5563", fontSize:11 }}>· {displayName}{profile?.institution ? ` · ${profile.institution}` : ""}</span>
+          <span style={{ color:"#4B5563", fontSize:11 }}>· {displayName}{profile?.institutions?.name ? ` · ${profile.institutions.name}` : ""}</span>
+          {isAdmin && <span style={{ background:"#312E81", border:"1px solid #4338CA", borderRadius:20, padding:"1px 10px", fontSize:10, color:"#A5B4FC" }}>🏛 Admin</span>}
         </div>
         <div style={{ display:"flex", gap:8 }}>
           <button onClick={signOut} style={{ background:"#2D2D2D", border:"none", borderRadius:8, padding:"6px 14px", color:"#9CA3AF", cursor:"pointer", fontSize:12 }}>Sign out</button>
@@ -192,11 +247,11 @@ export default function Admin({ onBack }) {
         </div>
       </div>
 
-      <div style={{ maxWidth:740, margin:"30px auto", padding:"0 20px 60px" }}>
-        <div style={{ display:"flex", gap:0, marginBottom:20, borderBottom:"1px solid #2D2D2D" }}>
-          {["list","generate"].map(t => (
+      <div style={{ maxWidth:820, margin:"30px auto", padding:"0 20px 60px" }}>
+        <div style={{ display:"flex", gap:0, marginBottom:20, borderBottom:"1px solid #2D2D2D", flexWrap:"wrap" }}>
+          {tabs.map(t => (
             <button key={t} onClick={()=>setTab(t)} style={{ background:"none", border:"none", borderBottom:tab===t?"2px solid #7C3AED":"2px solid transparent", color:tab===t?"#A78BFA":"#6B7280", cursor:"pointer", padding:"9px 18px", fontSize:13, fontWeight:tab===t?600:400 }}>
-              {t==="list" ? `📚 All Course Units (${courses.length})` : "✨ Add a Course Unit"}
+              {t==="list" ? `📚 Course Units (${courses.length})` : t==="generate" ? "✨ Add a Course Unit" : "🏛 Institution Dashboard"}
             </button>
           ))}
         </div>
@@ -204,8 +259,7 @@ export default function Admin({ onBack }) {
         {tab==="list" && (
           <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
             <p style={{ color:"#4B5563", fontSize:11, margin:"0 0 6px" }}>
-              This list is shared — every course unit added by any lecturer appears here and on every
-              student's Join screen. You can only delete units you created yourself.
+              Courses your institution's students can see on the Join screen. You can only delete units you created yourself.
             </p>
             {courses.length === 0 && <p style={{ color:"#4B5563", textAlign:"center", marginTop:30 }}>No courses yet. Try "Add a Course Unit" above.</p>}
             {courses.map(c => {
@@ -235,10 +289,9 @@ export default function Admin({ onBack }) {
               <p style={{ color:"#6B7280", fontSize:12, margin:"0 0 18px" }}>
                 Works for any subject — programming, business, marketing, accounting, history, science,
                 law, anything you teach. Every course you add becomes its own separate unit and appears
-                as a new option on the Join screen for every student. Upload your slides or a syllabus
-                PDF, paste your notes, or just describe the topics you want covered — SEMAI will design
-                the modules, slides, and a fitting hands-on exercise (code for technical subjects, a
-                worked example for everything else).
+                as a new option on the Join screen for students at your institution. Upload your slides
+                or a syllabus, paste your notes, or just describe the topics you want covered — SEMAI
+                will design the modules, slides, and a fitting hands-on exercise.
               </p>
 
               <label style={{ fontSize:11, color:"#6B7280" }}>COURSE TITLE *</label>
@@ -248,7 +301,7 @@ export default function Admin({ onBack }) {
               <input {...genInp("lecturer")} placeholder="e.g. Ssemambo Steven"/>
 
               <label style={{ fontSize:11, color:"#6B7280" }}>INSTITUTION</label>
-              <input {...genInp("institution")} placeholder="e.g. Makerere University"/>
+              <input {...genInp("institution")} placeholder="e.g. Makerere University" disabled/>
 
               <label style={{ fontSize:11, color:"#6B7280" }}>UPLOAD NOTES (.txt)</label>
               <div style={{ display:"flex", gap:10, alignItems:"center", marginBottom:12 }}>
@@ -317,6 +370,62 @@ export default function Admin({ onBack }) {
                   ))}
                 </div>
               </div>
+            )}
+          </div>
+        )}
+
+        {tab==="institution" && isAdmin && (
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+            {dashLoading && <p style={{ color:"#6B7280", textAlign:"center", marginTop:20 }}>Loading dashboard…</p>}
+            {dash && (
+              <>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:12 }}>
+                  {[
+                    { label:"Lecturers", value: dash.lecturers.length, icon:"👩‍🏫" },
+                    { label:"Students", value: dash.students.length, icon:"🎓" },
+                    { label:"Courses", value: dash.courses.length, icon:"📚" },
+                  ].map(s => (
+                    <div key={s.label} style={{ background:"#1A1A2E", border:"1px solid #2D2D4A", borderRadius:12, padding:16, textAlign:"center" }}>
+                      <div style={{ fontSize:22 }}>{s.icon}</div>
+                      <div style={{ fontSize:24, fontWeight:800, margin:"4px 0 2px" }}>{s.value}</div>
+                      <div style={{ fontSize:11, color:"#6B7280" }}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ background:"#1A1A2E", border:"1px solid #2D2D4A", borderRadius:14, padding:20 }}>
+                  <h4 style={{ margin:"0 0 12px", fontSize:13, color:"#A78BFA" }}>👩‍🏫 Lecturers ({dash.lecturers.length})</h4>
+                  {dash.lecturers.length === 0 && <p style={{ color:"#4B5563", fontSize:12 }}>No lecturers have joined yet.</p>}
+                  {dash.lecturers.map(l => (
+                    <div key={l.id} style={{ display:"flex", justifyContent:"space-between", padding:"7px 0", borderBottom:"1px solid #2D2D2D", fontSize:12.5 }}>
+                      <span>{l.name}</span>
+                      <span style={{ color:"#4B5563" }}>{new Date(l.created_at).toLocaleDateString()}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ background:"#1A1A2E", border:"1px solid #2D2D4A", borderRadius:14, padding:20 }}>
+                  <h4 style={{ margin:"0 0 12px", fontSize:13, color:"#A78BFA" }}>📚 Courses ({dash.courses.length})</h4>
+                  {dash.courses.length === 0 && <p style={{ color:"#4B5563", fontSize:12 }}>No courses added yet.</p>}
+                  {dash.courses.map(c => (
+                    <div key={c.id} style={{ display:"flex", justifyContent:"space-between", padding:"7px 0", borderBottom:"1px solid #2D2D2D", fontSize:12.5 }}>
+                      <span>{c.title}{c.subject ? ` · ${c.subject}` : ""}</span>
+                      <span style={{ color:"#4B5563" }}>{c.lecturer_name}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ background:"#1A1A2E", border:"1px solid #2D2D4A", borderRadius:14, padding:20 }}>
+                  <h4 style={{ margin:"0 0 12px", fontSize:13, color:"#A78BFA" }}>🎓 Students ({dash.students.length})</h4>
+                  {dash.students.length === 0 && <p style={{ color:"#4B5563", fontSize:12 }}>No students have registered yet.</p>}
+                  {dash.students.map(s => (
+                    <div key={s.id} style={{ display:"flex", justifyContent:"space-between", padding:"7px 0", borderBottom:"1px solid #2D2D2D", fontSize:12.5 }}>
+                      <span>{s.name}</span>
+                      <span style={{ color:"#4B5563" }}>{s.modulesCompleted} module{s.modulesCompleted===1?"":"s"} completed</span>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         )}

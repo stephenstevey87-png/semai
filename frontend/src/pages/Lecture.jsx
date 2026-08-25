@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getCourse, generateNotes } from "../api";
+import { getCourse, generateNotes, recordProgress } from "../api";
 import { downloadLectureNotesPdf } from "../lectureNotesPdf";
 import { useVoice } from "../hooks/useVoice";
 import { useSEMAI } from "../hooks/useSEMAI";
@@ -10,7 +10,7 @@ import Toolbar     from "../components/Toolbar";
 
 const fmt = s => `${String(Math.floor(s/3600)).padStart(2,"0")}:${String(Math.floor((s%3600)/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
 
-export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
+export default function Lecture({ studentName, studentId, courseId, onLeave, onAdmin }) {
   const [course,   setCourse]   = useState(null);
   const [screen,   setScreen]   = useState("welcome"); // welcome | menu | slides | ide
   const [mod,      setMod]      = useState(null);
@@ -116,6 +116,7 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
     if (isLast) {
       setModuleComplete(true); // slides are done — lecture notes can now be generated for this module
       const m = modRef.current;
+      recordProgress({ studentId, courseId, moduleId: m.id, completed: true }); // best-effort — powers the institution dashboard
       const has = m?.practicalType && m.practicalType !== "none" && m.practical;
       if (has) goIDEAuto();
       else voice.speak(`Well done, class! That completes all the slides for ${m?.title}. This module doesn't include a hands-on exercise, so feel free to ask me questions, or choose another module whenever you're ready.`);
