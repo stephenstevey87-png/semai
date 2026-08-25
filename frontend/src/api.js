@@ -28,6 +28,15 @@ export async function generateCourse({ title, lecturer, institution, sourceText 
   return data; // full course object { id, title, description, subject, modules, ... }
 }
 
+export async function generateNotes({ courseTitle, moduleTitle, slides, practical, practicalNote, practicalType }) {
+  const { data, error } = await supabase.functions.invoke("generate-notes", {
+    body: { courseTitle, moduleTitle, slides, practical, practicalNote, practicalType },
+  });
+  if (error) throw new Error(error.message || "Notes generation failed");
+  if (data?.error) throw new Error(data.error);
+  return data; // { introduction, sections: [{title, notes}], summary, keyTakeaways: [] }
+}
+
 // ── Curriculum reads — straight from the database, no backend needed ──────────────
 export async function getCourses() {
   const { data: courses, error } = await supabase

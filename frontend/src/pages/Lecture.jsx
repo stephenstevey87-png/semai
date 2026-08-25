@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { getCourse } from "../api";
+import { getCourse, generateNotes } from "../api";
+import { downloadLectureNotesPdf } from "../lectureNotesPdf";
 import { useVoice } from "../hooks/useVoice";
 import { useSEMAI } from "../hooks/useSEMAI";
 import SlideScreen from "../components/SlideScreen";
@@ -21,6 +22,8 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
   const [raisedHand,setRaisedHand]=useState(false);
   const [handMsg,  setHandMsg]  = useState("");
   const [drawerOpen,setDrawerOpen]=useState(false);
+  const [moduleComplete, setModuleComplete] = useState(false); // true once all slides for the current module are done
+  const [notesLoading,   setNotesLoading]   = useState(false);
 
   // ── Autonomous lecture flow ────────────────────────────────────────────
   const [autoTeach, setAutoTeach] = useState(true);   // when on, SEMAI drives itself through the lecture
@@ -111,6 +114,7 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
   const continueNow = (isLast) => {
     clearCountdown(); setWaiting(false); voice.stopListening();
     if (isLast) {
+      setModuleComplete(true); // slides are done — lecture notes can now be generated for this module
       const m = modRef.current;
       const has = m?.practicalType && m.practicalType !== "none" && m.practical;
       if (has) goIDEAuto();
@@ -141,7 +145,7 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
   // ── Start module ──────────────────────────────────────────────────────────
   const startMod = (m) => {
     clearCountdown(); setWaiting(false); voice.stopListening();
-    setMod(m); setSlideIdx(0); setScreen("slides"); setDrawerOpen(false);
+    setMod(m); setSlideIdx(0); setScreen("slides"); setDrawerOpen(false); setModuleComplete(false);
     const firstSlide = m.slides[0];
     voice.speak(`Excellent choice! Let us begin with ${m.title}.`, () => {
       if (firstSlide) teach(m.title, firstSlide, m.slides.length === 1);
@@ -177,6 +181,24 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
   };
 
   const handleVoiceAsk = () => voice.startListening(text => askSemai(text));
+
+  // ── Lecture notes PDF — AI-expanded, branded write-up of the module just taught ──
+  const downloadNotes = async () => {
+    if (!mod || notesLoading) return;
+    setNotesLoading(true);
+    try {
+      const notes = await generateNotes({
+        courseTitle: course.title, moduleTitle: mod.title,
+        slides: mod.slides, practical: mod.practical,
+        practicalNote: mod.practicalNote, practicalType: mod.practicalType,
+      });
+      downloadLectureNotesPdf({ course, mod, notes, studentName });
+    } catch {
+      voice.speak("Sorry, I had trouble preparing your notes just now. Please try again in a moment.");
+    } finally {
+      setNotesLoading(false);
+    }
+  };
 
   const toggleHand = () => {
     const next = !raisedHand; setRaisedHand(next);
@@ -237,6 +259,12 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
             style={{ background:autoTeach?"#1E1B4B":"#374151", border:autoTeach?"1px solid #7C3AED":"none", borderRadius:7, padding:"5px 11px", color:autoTeach?"#A78BFA":"#9CA3AF", cursor:"pointer", fontSize:11 }}>
             {autoTeach ? "▶ Auto" : "⏸ Manual"}
           </button>
+          {mod && (
+            <button onClick={downloadNotes} disabled={notesLoading} title="Download AI-expanded lecture notes for this module as a PDF"
+              style={{ background:"#1F2937", border:"1px solid #374151", borderRadius:7, padding:"5px 11px", color:notesLoading?"#4B5563":"#A78BFA", cursor:notesLoading?"default":"pointer", fontSize:11 }}>
+              {notesLoading ? "Preparing…" : "📄 Notes"}
+            </button>
+          )}
           <button onClick={()=>setDrawerOpen(o=>!o)}
             style={{ background:drawerOpen?"#7C3AED":"#374151", border:"none", borderRadius:7, padding:"5px 11px", color:"white", cursor:"pointer", fontSize:12 }}>
             ☰ Modules
@@ -368,6 +396,24 @@ export default function Lecture({ studentName, courseId, onLeave, onAdmin }) {
             <button onClick={pauseForQuestion}
               style={{ background:"#1F2937", border:"1px solid #374151", borderRadius:8, padding:"6px 14px", color:"#9CA3AF", cursor:"pointer", fontSize:12 }}>❓ I have a question</button>
           </div>
+        </div>
+      )}
+
+      {/* Lecture complete — offer the AI-expanded notes PDF. Stays up (not a fleeting toast) until
+          dismissed or a new module starts, since this is a genuine deliverable, not a transient status. */}
+      {moduleComplete && mod && !waiting && !semai.preparing && (
+        <div style={{ position:"fixed", bottom:toolbarHeight()+8, left:"50%", transform:"translateX(-50%)", background:"linear-gradient(135deg,rgba(124,58,237,0.18),rgba(67,56,202,0.18))", border:"1px solid #7C3AED", borderRadius:14, padding:"12px 16px", zIndex:52, display:"flex", alignItems:"center", gap:14, maxWidth:"85%", animation:"fadeIn 0.3s ease" }}>
+          <span style={{ fontSize:20 }}>🎉</span>
+          <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+            <span style={{ fontSize:12.5, color:"#E2E8F0", fontWeight:600 }}>Lecture complete — {mod.title}</span>
+            <span style={{ fontSize:11, color:"#9CA3AF" }}>Your expanded study notes are ready to download</span>
+          </div>
+          <button onClick={downloadNotes} disabled={notesLoading}
+            style={{ background:"#7C3AED", border:"none", borderRadius:8, padding:"7px 16px", color:"white", cursor:notesLoading?"default":"pointer", fontSize:12, fontWeight:600, whiteSpace:"nowrap", opacity:notesLoading?0.7:1 }}>
+            {notesLoading ? "Preparing PDF…" : "📄 Download Notes"}
+          </button>
+          <button onClick={()=>setModuleComplete(false)} title="Dismiss"
+            style={{ background:"none", border:"none", color:"#6B7280", cursor:"pointer", fontSize:14, padding:"0 2px" }}>✕</button>
         </div>
       )}
 
