@@ -2,9 +2,18 @@
 // after the OIDC redirect from lti-login. This function is the actual security boundary:
 // every check below is required by the LTI 1.3 spec, and skipping any of them would let
 // a forged or replayed request impersonate a real student or lecturer.
+//
+// Handles TWO message types:
+//   LtiResourceLinkRequest  — a student/lecturer opening an existing SEMAI link. Launches
+//                             into whichever course that specific link points to (or the
+//                             platform's fallback default course).
+//   LtiDeepLinkingRequest   — a lecturer adding a NEW SEMAI link inside their LMS course.
+//                             Signs them in, then sends them to a course-picker page instead
+//                             of a lecture; picking a course there (lti-deep-link-respond)
+//                             is what creates a link with a specific course attached.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { jwtVerify, createRemoteJWKSet } from "npm:jose@5";
+import { jwtVerify, createRemoteJWKSet, SignJWT } from "npm:jose@5";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || "https://semai-lecturer.netlify.app";
@@ -12,6 +21,8 @@ const FRONTEND_URL = Deno.env.get("FRONTEND_URL") || "https://semai-lecturer.net
 const ROLE_CLAIM = "https://purl.imsglobal.org/spec/lti/claim/roles";
 const DEPLOYMENT_CLAIM = "https://purl.imsglobal.org/spec/lti/claim/deployment_id";
 const MESSAGE_TYPE_CLAIM = "https://purl.imsglobal.org/spec/lti/claim/message_type";
+const TARGET_LINK_URI_CLAIM = "https://purl.imsglobal.org/spec/lti/claim/target_link_uri";
+const DL_SETTINGS_CLAIM = "https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings";
 
 function errorPage(title: string, detail: string, status = 400): Response {
   return new Response(
@@ -45,8 +56,7 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
-    // 1. Verify our own state JWT (issued by lti-login) — confirms this launch is a direct
-    //    continuation of a login we ourselves initiated, not a forged/replayed request.
+    // 1. Verify our own state JWT (issued by lti-login).
     const stateSecret = new TextEncoder().encode(Deno.env.get("LTI_STATE_SECRET")!);
     let statePayload: any;
     try {
@@ -58,32 +68,26 @@ Deno.serve(async (req: Request) => {
     const { data: platform } = await supabase.from("lti_platforms").select("*").eq("id", statePayload.platformId).single();
     if (!platform) return errorPage("Unknown platform", "This platform registration no longer exists.");
 
-    // 2. Verify the LMS's id_token: signature (via the LMS's own published JWKS), issuer,
-    //    audience, and freshness. This is the step that actually proves the request came
-    //    from the real LMS and hasn't been tampered with.
+    // 2. Verify the LMS's id_token signature (via its own published JWKS), issuer, audience.
     const jwks = createRemoteJWKSet(new URL(platform.jwks_url));
     let claims: any;
     try {
-      ({ payload: claims } = await jwtVerify(idToken, jwks, {
-        issuer: platform.issuer,
-        audience: platform.client_id,
-      }));
+      ({ payload: claims } = await jwtVerify(idToken, jwks, { issuer: platform.issuer, audience: platform.client_id }));
     } catch (e) {
       return errorPage("Launch verification failed", `Could not verify the id_token against the LMS's published keys: ${String((e as any)?.message || e)}`);
     }
 
-    // 3. Verify LTI-specific claims the generic JWT check above doesn't cover.
+    // 3. Verify LTI-specific claims.
     if (claims.nonce !== statePayload.nonce) return errorPage("Launch verification failed", "Nonce mismatch — this looks like a replayed launch.");
     if (claims[DEPLOYMENT_CLAIM] !== platform.deployment_id) return errorPage("Launch verification failed", "Deployment ID does not match this platform registration.");
-    if (claims[MESSAGE_TYPE_CLAIM] !== "LtiResourceLinkRequest") {
-      return errorPage("Unsupported launch type", `SEMAI currently only supports resource link launches, not "${claims[MESSAGE_TYPE_CLAIM]}". Deep Linking support is planned but not yet built.`);
+
+    const messageType = claims[MESSAGE_TYPE_CLAIM];
+    if (messageType !== "LtiResourceLinkRequest" && messageType !== "LtiDeepLinkingRequest") {
+      return errorPage("Unsupported launch type", `SEMAI does not support "${messageType}" launches.`);
     }
 
-    if (!platform.default_course_id) {
-      return errorPage("No course configured", "This platform is registered but has no default SEMAI course assigned yet — an institution administrator needs to set one.");
-    }
-
-    // 4. Resolve (or provision) a stable SEMAI account for this LMS user.
+    // 4. Resolve (or provision) a stable SEMAI account for this LMS user — needed for both
+    //    message types, since a Deep Linking request also needs the lecturer signed in.
     const sub: string = claims.sub;
     const roles: string[] = claims[ROLE_CLAIM] || [];
     const role = inferRole(roles);
@@ -104,14 +108,46 @@ Deno.serve(async (req: Request) => {
       await supabase.from("lti_identities").insert({ issuer: platform.issuer, lms_subject: sub, user_id: created.user.id, email });
     }
 
-    // 5. Establish a real SEMAI session for this user and send their browser into the app,
-    //    already signed in — no separate SEMAI login step, which is the entire point of SSO.
+    // 5a. Deep Linking request — sign in, then send to the course-picker page instead of a lecture.
+    if (messageType === "LtiDeepLinkingRequest") {
+      const dlSettings = claims[DL_SETTINGS_CLAIM];
+      if (!dlSettings?.deep_link_return_url) return errorPage("Incomplete Deep Linking request", "The LMS did not provide a return URL.");
+
+      const dlSessionSecret = new TextEncoder().encode(Deno.env.get("LTI_STATE_SECRET")!);
+      const dlToken = await new SignJWT({
+        platformId: platform.id,
+        deepLinkReturnUrl: dlSettings.deep_link_return_url,
+        data: dlSettings.data || "",
+        institutionId: platform.institution_id,
+      }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("15m").sign(dlSessionSecret);
+
+      const { data: link, error: linkErr } = await supabase.auth.admin.generateLink({
+        type: "magiclink", email,
+        options: { redirectTo: `${FRONTEND_URL}/?ltiDeepLink=${encodeURIComponent(dlToken)}` },
+      });
+      if (linkErr || !link?.properties?.action_link) return errorPage("Sign-in failed", String(linkErr?.message || "Could not establish a session."), 500);
+      return new Response(null, { status: 302, headers: { Location: link.properties.action_link } });
+    }
+
+    // 5b. Resource Link request — a specific link the LMS is opening. A link created via
+    //     Deep Linking encodes its course in the target_link_uri's `course` query param;
+    //     links from a simpler platform registration (no Deep Linking) fall back to the
+    //     platform's fixed default_course_id.
+    let courseId = platform.default_course_id;
+    const targetLinkUri: string | undefined = claims[TARGET_LINK_URI_CLAIM];
+    if (targetLinkUri) {
+      try {
+        const fromLink = new URL(targetLinkUri).searchParams.get("course");
+        if (fromLink) courseId = fromLink;
+      } catch { /* not a valid absolute URL — ignore, use the platform default */ }
+    }
+    if (!courseId) return errorPage("No course configured", "This link has no SEMAI course attached, and the platform has no default course set either.");
+
     const { data: link, error: linkErr } = await supabase.auth.admin.generateLink({
       type: "magiclink", email,
-      options: { redirectTo: `${FRONTEND_URL}/?ltiCourse=${encodeURIComponent(platform.default_course_id)}` },
+      options: { redirectTo: `${FRONTEND_URL}/?ltiCourse=${encodeURIComponent(courseId)}` },
     });
     if (linkErr || !link?.properties?.action_link) return errorPage("Sign-in failed", String(linkErr?.message || "Could not establish a session."), 500);
-
     return new Response(null, { status: 302, headers: { Location: link.properties.action_link } });
   } catch (err) {
     console.error("lti-launch error:", String((err as any)?.message || err));

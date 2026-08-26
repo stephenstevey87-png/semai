@@ -180,30 +180,34 @@ so a course link inside the LMS launches straight into SEMAI, already signed in 
 separate SEMAI login. From the **🔗 LMS Integration** tab in the Institution Dashboard:
 
 1. Give your LMS administrator the three URLs shown there (OIDC Login, Redirect/Launch,
-   Tool JWKS) to register SEMAI as an "External Tool" / "LTI 1.3 Tool"
+   Tool JWKS) to register SEMAI as an "External Tool" / "LTI 1.3 Tool" — enable **Deep
+   Linking** on the LMS side if you want per-assignment course picking (see below)
 2. They'll give you back a **Client ID** and **Deployment ID**
-3. Paste those in, along with the LMS's own OIDC/JWKS endpoints, and pick which SEMAI
-   course this connection launches into
-4. Set the one required secret (see below), and you're done
+3. Paste those in, along with the LMS's own OIDC/JWKS endpoints, and pick a fallback
+   SEMAI course this connection launches into
+4. Set the two required secrets (see below), and you're done
 
-**Required secret** — Supabase dashboard → Edge Functions → Secrets:
+**Required secrets** — Supabase dashboard → Edge Functions → Secrets:
 ```
 LTI_STATE_SECRET=<any long random string, used to sign the launch's anti-replay state>
+LTI_TOOL_PRIVATE_KEY=<the PEM-format RSA private key generated for this deployment>
 ```
 
-**Current scope (Phase 1) vs. what's still ahead:**
+**Current scope vs. what's still ahead:**
 - ✅ Full LTI 1.3 launch security: JWT signature verification against the LMS's own
   published keys, issuer/audience/nonce/deployment_id checks, replay protection
 - ✅ Automatic account provisioning — the first launch from a given LMS user creates
   their SEMAI account (role inferred from their LMS role); every launch after that
   reuses the same account
-- ⏳ **Deep Linking** — right now each LMS connection launches into one fixed course,
-  set by the institution_admin. Letting a lecturer pick a specific SEMAI course from
-  inside the LMS's own content picker (so different assignments can link to different
-  courses) is a separate, not-yet-built piece of the spec
+- ✅ **Deep Linking** — a lecturer adding a SEMAI link inside their LMS (if the LMS
+  admin enabled Deep Linking during registration) is signed in and shown a course
+  picker; the link created is specific to whichever course they chose, so different
+  assignments/pages can point at different SEMAI courses. Platforms that don't use
+  Deep Linking still work exactly as before, via the platform's fixed default course.
 - ⏳ **Grade passback (Assignment & Grade Services)** — module completions don't yet
-  flow back into the LMS gradebook. SEMAI's own signing keypair for this already
-  exists (published at the Tool JWKS URL) — the AGS calls themselves aren't built
+  flow back into the LMS gradebook. SEMAI's own signing keypair (used for Deep Linking
+  responses above) already exists and is published at the Tool JWKS URL — the actual
+  AGS calls (fetching line items, posting scores) aren't built yet
 
 ## Upgrading Voice (ElevenLabs)
 

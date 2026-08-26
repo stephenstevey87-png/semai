@@ -1,17 +1,16 @@
 // Publishes SEMAI's own public signing key so an LMS can verify anything SEMAI signs
-// (used during tool registration, and later for Assignment & Grade Services calls).
-// The private half of this keypair is never in this file — it's a Supabase secret
-// (LTI_TOOL_PRIVATE_KEY), used only by functions that need to sign something, not this one.
+// (used during tool registration, and for Deep Linking responses / grade passback).
+// The private half of this keypair is never in this file — it's the Supabase secret
+// LTI_TOOL_PRIVATE_KEY, used only by functions that need to sign something, not this one.
 
 const corsHeaders = { "Access-Control-Allow-Origin": "*" };
 
-// Public RSA key components only — safe to hardcode, this is not sensitive data.
 const JWK = {
   kty: "RSA",
   use: "sig",
   alg: "RS256",
-  kid: "semai-lti-2026-08",
-  n: "mlEaQYz_xvS3VbRKXmAnK7uiq9aKJH277tGcI_jus8xn3jEj-xp-4nmrXBYTCnJsSyPM10d1XqNKFyUn4nnar81EoZOv4ZiN3nn6FMNUAaAG7PY0X6NBcX2UAk6iz5wsXBbALDdpk_gLKYVgUnbCckTQd13O2DRomGToIayNzai0xlQSt4mF0A95iyqObLJsrV8hE1WZXkuiaJYZAKRGWVn4hs0N8bp4ai39Kv5C7Sf96knwdhbqx8geZ8zfxL--A5uQhu_AW7qMi1hMQQNjphiIV37cugEU6yXGnhrGY8-xXXJYh_dBO-4ZiKaqMl6XaLQkLJW4h_pfC7oSNXlFeQ",
+  kid: "semai-lti-2026-08b",
+  n: "jXpRq9F8JHERscgq3GMIt1KStcENDV-P7llnnGY8EzSE_MvRZ6D4YIs5nsTy6GK7LRluEyNKA8Wi_FrwsxS1OflO83aMOKgbyiIKObCpgCOjiFVZDk24Xvz205nyzmRtuL2ex5DPSL8fLep0jCBSzys62qR3XHW_S9cr9JDDpXo0zw_Km9L5OOWH5s0upLRzoM3UNVfF_WsAyorpyqUl84t_RoGMCXjBG8kJIgVf6dOU3Gqu3wAYuGfNCgJHvv0Rv4jvIDmImLFFELFZSxsrGFF-kELMJd_5XtgUIMW3FG60_Cabr6svfE4FtkVhhS2JyeNFkN5ldLpRdtfyLihhpw",
   e: "AQAB",
 };
 
