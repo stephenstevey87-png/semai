@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { getCourses, deleteCourse, saveCourse, generateCourse, listInstitutions, getInstitutionDashboard } from "../api";
+import { getCourses, deleteCourse, saveCourse, generateCourse, listInstitutions, getInstitutionDashboard, listPlatforms, savePlatform, deletePlatform } from "../api";
 import { supabase, signUpUser, signInUser, signOutUser, getUserProfile } from "../supabaseClient";
+
+function blankPlatform() {
+  return { name:"", issuer:"", client_id:"", deployment_id:"", auth_login_url:"", auth_token_url:"", jwks_url:"", default_course_id:"" };
+}
 
 export default function Admin({ onBack }) {
   const [session, setSession] = useState(undefined); // undefined = loading, null = signed out
@@ -24,6 +28,10 @@ export default function Admin({ onBack }) {
 
   const [dash, setDash] = useState(null); // institution dashboard data
   const [dashLoading, setDashLoading] = useState(false);
+  const [platforms, setPlatforms] = useState([]);
+  const [platformForm, setPlatformForm] = useState(blankPlatform());
+  const [platformStatus, setPlatformStatus] = useState("");
+  const [platformSaving, setPlatformSaving] = useState(false);
 
   // ── Auth session ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -49,6 +57,11 @@ export default function Admin({ onBack }) {
 
   const load = () => getCourses().then(d => setCourses(d.courses || []));
   useEffect(() => { if (session) load(); }, [session]);
+
+  const loadPlatforms = () => {
+    if (profile?.institution_id) listPlatforms(profile.institution_id).then(setPlatforms).catch(()=>{});
+  };
+  useEffect(() => { if (profile?.role === "institution_admin" && tab === "lms") loadPlatforms(); }, [profile, tab]);
 
   useEffect(() => {
     if (profile?.role === "institution_admin" && profile.institution_id && tab === "institution") {
@@ -143,6 +156,32 @@ export default function Admin({ onBack }) {
     setGenLoading(false);
   };
 
+  // ── LTI / LMS platform registration ─────────────────────────────────────
+  const submitPlatform = async () => {
+    const p = platformForm;
+    if (!p.name.trim() || !p.issuer.trim() || !p.client_id.trim() || !p.deployment_id.trim() || !p.auth_login_url.trim() || !p.jwks_url.trim()) {
+      setPlatformStatus("❌ Name, Issuer, Client ID, Deployment ID, Auth Login URL, and JWKS URL are all required.");
+      return;
+    }
+    setPlatformSaving(true); setPlatformStatus("");
+    try {
+      await savePlatform({ ...p, institution_id: profile.institution_id, default_course_id: p.default_course_id || null });
+      setPlatformStatus("✅ Platform saved.");
+      setPlatformForm(blankPlatform());
+      loadPlatforms();
+    } catch (err) {
+      setPlatformStatus(`❌ ${err.message || "Save failed."}`);
+    }
+    setPlatformSaving(false);
+  };
+
+  const removePlatform = async (id) => {
+    if (!confirm("Remove this LMS connection? Existing launches from it will stop working.")) return;
+    try { await deletePlatform(id); loadPlatforms(); } catch (err) { alert(err.message); }
+  };
+
+  const SUPABASE_FN_BASE = "https://hyxxmiigacfkqdwvxsjh.supabase.co/functions/v1";
+
   // ── Loading ──────────────────────────────────────────────────────────────
   if (session === undefined) {
     return <div style={{ height:"100vh", background:"#0F0C29", display:"flex", alignItems:"center", justifyContent:"center", color:"#6B7280", fontFamily:"system-ui" }}>Loading…</div>;
@@ -230,7 +269,7 @@ export default function Admin({ onBack }) {
   // ── Signed in ────────────────────────────────────────────────────────────
   const displayName = profile?.name || session.user.email;
   const isAdmin = profile?.role === "institution_admin";
-  const tabs = isAdmin ? ["list","generate","institution"] : ["list","generate"];
+  const tabs = isAdmin ? ["list","generate","institution","lms"] : ["list","generate"];
 
   return (
     <div style={{ minHeight:"100vh", background:"#0F0C29", fontFamily:"'Segoe UI',system-ui,sans-serif", color:"white" }}>
@@ -251,7 +290,7 @@ export default function Admin({ onBack }) {
         <div style={{ display:"flex", gap:0, marginBottom:20, borderBottom:"1px solid #2D2D2D", flexWrap:"wrap" }}>
           {tabs.map(t => (
             <button key={t} onClick={()=>setTab(t)} style={{ background:"none", border:"none", borderBottom:tab===t?"2px solid #7C3AED":"2px solid transparent", color:tab===t?"#A78BFA":"#6B7280", cursor:"pointer", padding:"9px 18px", fontSize:13, fontWeight:tab===t?600:400 }}>
-              {t==="list" ? `📚 Course Units (${courses.length})` : t==="generate" ? "✨ Add a Course Unit" : "🏛 Institution Dashboard"}
+              {t==="list" ? `📚 Course Units (${courses.length})` : t==="generate" ? "✨ Add a Course Unit" : t==="institution" ? "🏛 Institution Dashboard" : "🔗 LMS Integration"}
             </button>
           ))}
         </div>
@@ -427,6 +466,94 @@ export default function Admin({ onBack }) {
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {tab==="lms" && isAdmin && (
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+            <div style={{ background:"#1A1A2E", border:"1px solid #2D2D4A", borderRadius:14, padding:20 }}>
+              <h4 style={{ margin:"0 0 6px", fontSize:14, color:"#A78BFA" }}>Values to give your LMS administrator</h4>
+              <p style={{ color:"#6B7280", fontSize:11.5, margin:"0 0 12px" }}>
+                When registering SEMAI as an "External Tool" / "LTI 1.3 Tool" in Canvas, Moodle,
+                or Blackboard, use these. Your LMS admin will give you back a Client ID and
+                Deployment ID to paste into the form below.
+              </p>
+              {[
+                { label: "OIDC Login URL", value: `${SUPABASE_FN_BASE}/lti-login` },
+                { label: "Redirect / Launch URL", value: `${SUPABASE_FN_BASE}/lti-launch` },
+                { label: "Tool JWKS URL", value: `${SUPABASE_FN_BASE}/lti-jwks` },
+              ].map(row => (
+                <div key={row.label} style={{ marginBottom:8 }}>
+                  <div style={{ fontSize:10.5, color:"#6B7280", marginBottom:2 }}>{row.label}</div>
+                  <code style={{ display:"block", background:"#0A0A0A", padding:"7px 10px", borderRadius:7, fontSize:11.5, color:"#D4D4D4", wordBreak:"break-all" }}>{row.value}</code>
+                </div>
+              ))}
+              <p style={{ color:"#4B5563", fontSize:11, marginTop:10 }}>
+                📌 Deep Linking (picking a SEMAI course from inside your LMS's content picker) and
+                grade passback aren't built yet — each platform below launches into one fixed
+                course, chosen below.
+              </p>
+            </div>
+
+            <div style={{ background:"#1A1A2E", border:"1px solid #2D2D4A", borderRadius:14, padding:20 }}>
+              <h4 style={{ margin:"0 0 12px", fontSize:14, color:"#A78BFA" }}>Connected platforms ({platforms.length})</h4>
+              {platforms.length === 0 && <p style={{ color:"#4B5563", fontSize:12, marginBottom:14 }}>None connected yet.</p>}
+              {platforms.map(p => (
+                <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom:"1px solid #2D2D2D" }}>
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600 }}>{p.name}</div>
+                    <div style={{ fontSize:11, color:"#6B7280" }}>{p.issuer} · launches into: {courses.find(c=>c.id===p.default_course_id)?.title || "— no course set —"}</div>
+                  </div>
+                  <button onClick={()=>removePlatform(p.id)} style={{ background:"#991B1B", border:"none", borderRadius:7, padding:"6px 12px", color:"white", cursor:"pointer", fontSize:11 }}>Remove</button>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background:"#1A1A2E", border:"1px solid #2D2D4A", borderRadius:14, padding:20 }}>
+              <h4 style={{ margin:"0 0 14px", fontSize:14, color:"#A78BFA" }}>Connect a new platform</h4>
+
+              <label style={{ fontSize:11, color:"#6B7280" }}>DISPLAY NAME *</label>
+              <input value={platformForm.name} onChange={e=>setPlatformForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Canvas — Makerere University"
+                style={{ width:"100%", padding:"10px 13px", borderRadius:9, border:"1px solid #374151", background:"#111827", color:"white", fontSize:13, marginBottom:12, boxSizing:"border-box" }}/>
+
+              <label style={{ fontSize:11, color:"#6B7280" }}>ISSUER (iss) *</label>
+              <input value={platformForm.issuer} onChange={e=>setPlatformForm(f=>({...f,issuer:e.target.value}))} placeholder="e.g. https://canvas.instructure.com"
+                style={{ width:"100%", padding:"10px 13px", borderRadius:9, border:"1px solid #374151", background:"#111827", color:"white", fontSize:13, marginBottom:12, boxSizing:"border-box" }}/>
+
+              <label style={{ fontSize:11, color:"#6B7280" }}>CLIENT ID *</label>
+              <input value={platformForm.client_id} onChange={e=>setPlatformForm(f=>({...f,client_id:e.target.value}))} placeholder="Given by your LMS when you register SEMAI"
+                style={{ width:"100%", padding:"10px 13px", borderRadius:9, border:"1px solid #374151", background:"#111827", color:"white", fontSize:13, marginBottom:12, boxSizing:"border-box" }}/>
+
+              <label style={{ fontSize:11, color:"#6B7280" }}>DEPLOYMENT ID *</label>
+              <input value={platformForm.deployment_id} onChange={e=>setPlatformForm(f=>({...f,deployment_id:e.target.value}))} placeholder="Given by your LMS"
+                style={{ width:"100%", padding:"10px 13px", borderRadius:9, border:"1px solid #374151", background:"#111827", color:"white", fontSize:13, marginBottom:12, boxSizing:"border-box" }}/>
+
+              <label style={{ fontSize:11, color:"#6B7280" }}>AUTH LOGIN URL (LMS's OIDC endpoint) *</label>
+              <input value={platformForm.auth_login_url} onChange={e=>setPlatformForm(f=>({...f,auth_login_url:e.target.value}))} placeholder="e.g. https://canvas.instructure.com/api/lti/authorize_redirect"
+                style={{ width:"100%", padding:"10px 13px", borderRadius:9, border:"1px solid #374151", background:"#111827", color:"white", fontSize:13, marginBottom:12, boxSizing:"border-box" }}/>
+
+              <label style={{ fontSize:11, color:"#6B7280" }}>AUTH TOKEN URL (for future grade passback)</label>
+              <input value={platformForm.auth_token_url} onChange={e=>setPlatformForm(f=>({...f,auth_token_url:e.target.value}))} placeholder="e.g. https://canvas.instructure.com/login/oauth2/token"
+                style={{ width:"100%", padding:"10px 13px", borderRadius:9, border:"1px solid #374151", background:"#111827", color:"white", fontSize:13, marginBottom:12, boxSizing:"border-box" }}/>
+
+              <label style={{ fontSize:11, color:"#6B7280" }}>LMS JWKS URL *</label>
+              <input value={platformForm.jwks_url} onChange={e=>setPlatformForm(f=>({...f,jwks_url:e.target.value}))} placeholder="e.g. https://canvas.instructure.com/api/lti/security/jwks"
+                style={{ width:"100%", padding:"10px 13px", borderRadius:9, border:"1px solid #374151", background:"#111827", color:"white", fontSize:13, marginBottom:12, boxSizing:"border-box" }}/>
+
+              <label style={{ fontSize:11, color:"#6B7280" }}>LAUNCHES INTO WHICH SEMAI COURSE? *</label>
+              <select value={platformForm.default_course_id} onChange={e=>setPlatformForm(f=>({...f,default_course_id:e.target.value}))}
+                style={{ width:"100%", padding:"10px 13px", borderRadius:9, border:"1px solid #374151", background:"#111827", color:"white", fontSize:13, marginBottom:14, boxSizing:"border-box" }}>
+                <option value="">Select a course…</option>
+                {courses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+
+              {platformStatus && <p style={{ color: platformStatus.startsWith("✅")?"#34D399":"#F87171", fontSize:12, marginBottom:12 }}>{platformStatus}</p>}
+
+              <button onClick={submitPlatform} disabled={platformSaving}
+                style={{ background:platformSaving?"#374151":"linear-gradient(135deg,#7C3AED,#4F46E5)", border:"none", borderRadius:10, padding:"11px 22px", color:"white", cursor:platformSaving?"default":"pointer", fontSize:13, fontWeight:700 }}>
+                {platformSaving ? "Saving…" : "🔗 Connect Platform"}
+              </button>
+            </div>
           </div>
         )}
       </div>

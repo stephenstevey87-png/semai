@@ -233,3 +233,48 @@ create policy "staff view progress for their institution" on public.progress
         and c.institution_id = p.institution_id
     )
   );
+
+-- ── LTI 1.3 / LMS integration ────────────────────────────────────────────────
+-- One row per LMS deployment an institution has connected (e.g. their Canvas instance).
+-- Phase 1 scope: each deployment launches into ONE fixed SEMAI course (default_course_id).
+-- Per-assignment course picking (LTI Deep Linking) and grade passback are real, separate
+-- pieces of work — not built yet. See supabase/functions/lti-login and lti-launch.
+create table if not exists public.lti_platforms (
+  id uuid primary key default gen_random_uuid(),
+  institution_id uuid not null references public.institutions(id) on delete cascade,
+  name text not null,
+  issuer text not null,
+  client_id text not null,
+  deployment_id text not null,
+  auth_login_url text not null,
+  auth_token_url text not null,
+  jwks_url text not null,
+  default_course_id text references public.courses(id),
+  created_at timestamptz default now(),
+  unique (issuer, client_id, deployment_id)
+);
+
+-- Maps a (issuer, LMS user id) pair to a stable Supabase Auth user, so the same LMS user
+-- always lands on the same SEMAI account across repeated launches. Written only by the
+-- lti-launch Edge Function via the service role key.
+create table if not exists public.lti_identities (
+  id uuid primary key default gen_random_uuid(),
+  issuer text not null,
+  lms_subject text not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  email text,
+  created_at timestamptz default now(),
+  unique (issuer, lms_subject)
+);
+
+alter table public.lti_platforms  enable row level security;
+alter table public.lti_identities enable row level security;
+
+create policy "admins manage own institution platforms" on public.lti_platforms
+  for all using (
+    exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'institution_admin' and p.institution_id = lti_platforms.institution_id)
+  ) with check (
+    exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'institution_admin' and p.institution_id = lti_platforms.institution_id)
+  );
+-- lti_identities has no policies for anon/authenticated — service-role only, accessed
+-- exclusively from the lti-launch Edge Function.

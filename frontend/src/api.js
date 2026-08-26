@@ -184,6 +184,27 @@ export async function getInstitutionDashboard(institutionId) {
   };
 }
 
+// ── LTI / LMS integration ─────────────────────────────────────────────────────
+export async function listPlatforms(institutionId) {
+  const { data, error } = await supabase.from("lti_platforms").select("*").eq("institution_id", institutionId).order("created_at");
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function savePlatform(platform) {
+  const { id, ...fields } = platform;
+  const row = { ...fields };
+  if (id) row.id = id;
+  const { error } = await supabase.from("lti_platforms").upsert(row);
+  if (error) throw new Error(error.message);
+}
+
+export async function deletePlatform(id) {
+  const { error } = await supabase.from("lti_platforms").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+
 // ── Progress — lets an institution_admin/lecturer see real student activity ──────
 export async function recordProgress({ studentId, courseId, moduleId, completed }) {
   if (!studentId) return; // anonymous/legacy sessions have nothing to attribute progress to

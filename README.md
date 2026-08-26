@@ -173,6 +173,38 @@ Functions. It's kept in the repo for reference but is **not part of the deployed
 and doesn't need `GEMINI_API_KEY`, Render, or anything else set up for it to work —
 the frontend no longer calls it. Safe to delete if you don't need the reference.
 
+## LMS Integration (LTI 1.3)
+
+An institution_admin can connect SEMAI to their LMS (Canvas, Moodle, Blackboard, etc.)
+so a course link inside the LMS launches straight into SEMAI, already signed in — no
+separate SEMAI login. From the **🔗 LMS Integration** tab in the Institution Dashboard:
+
+1. Give your LMS administrator the three URLs shown there (OIDC Login, Redirect/Launch,
+   Tool JWKS) to register SEMAI as an "External Tool" / "LTI 1.3 Tool"
+2. They'll give you back a **Client ID** and **Deployment ID**
+3. Paste those in, along with the LMS's own OIDC/JWKS endpoints, and pick which SEMAI
+   course this connection launches into
+4. Set the one required secret (see below), and you're done
+
+**Required secret** — Supabase dashboard → Edge Functions → Secrets:
+```
+LTI_STATE_SECRET=<any long random string, used to sign the launch's anti-replay state>
+```
+
+**Current scope (Phase 1) vs. what's still ahead:**
+- ✅ Full LTI 1.3 launch security: JWT signature verification against the LMS's own
+  published keys, issuer/audience/nonce/deployment_id checks, replay protection
+- ✅ Automatic account provisioning — the first launch from a given LMS user creates
+  their SEMAI account (role inferred from their LMS role); every launch after that
+  reuses the same account
+- ⏳ **Deep Linking** — right now each LMS connection launches into one fixed course,
+  set by the institution_admin. Letting a lecturer pick a specific SEMAI course from
+  inside the LMS's own content picker (so different assignments can link to different
+  courses) is a separate, not-yet-built piece of the spec
+- ⏳ **Grade passback (Assignment & Grade Services)** — module completions don't yet
+  flow back into the LMS gradebook. SEMAI's own signing keypair for this already
+  exists (published at the Tool JWKS URL) — the AGS calls themselves aren't built
+
 ## Upgrading Voice (ElevenLabs)
 
 Browser Web Speech API is used for TTS/STT today (free, works everywhere, sounds
