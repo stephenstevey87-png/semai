@@ -135,6 +135,16 @@ export async function saveCourse(course) {
       const { error: slideErr } = await supabase.from("slides").insert(slideRows);
       if (slideErr) throw new Error(slideErr.message);
     }
+
+    const quizRows = (m.quiz || []).map((q, j) => ({
+      module_id: modRow.id, position: j, question: q.question || "",
+      options: q.options || [], correct_index: q.correctIndex ?? 0,
+      explanation: q.explanation || "", objective: q.objective || "",
+    }));
+    if (quizRows.length) {
+      const { error: quizErr } = await supabase.from("quiz_questions").insert(quizRows);
+      if (quizErr) throw new Error(quizErr.message);
+    }
   }
 
   return { id: courseId, message: "Course saved" };
@@ -167,9 +177,12 @@ export async function getInstitutionDashboard(institutionId) {
   ]);
 
   const courseIds = (courses || []).map(c => c.id);
-  const { data: progressRows } = courseIds.length
-    ? await supabase.from("progress").select("student_id, course_id, completed").in("course_id", courseIds)
-    : { data: [] };
+  const [{ data: progressRows }, { data: quizRows }] = courseIds.length
+    ? await Promise.all([
+        supabase.from("progress").select("student_id, course_id, completed").in("course_id", courseIds),
+        supabase.from("quiz_attempts").select("course_id, score, total").in("course_id", courseIds),
+      ])
+    : [{ data: [] }, { data: [] }];
 
   const completedByStudent = {};
   for (const r of progressRows || []) {
@@ -177,11 +190,47 @@ export async function getInstitutionDashboard(institutionId) {
     completedByStudent[r.student_id] = (completedByStudent[r.student_id] || 0) + 1;
   }
 
+  // Average quiz score per course — this is the real "is this lecture working" signal:
+  // a low average on a specific course/module is a much stronger effectiveness indicator
+  // than completion counts alone, since it reflects whether students actually understood
+  // the material rather than just clicking through it.
+  const quizStatsByCourse = {};
+  for (const r of quizRows || []) {
+    const s = (quizStatsByCourse[r.course_id] ||= { scoreSum: 0, totalSum: 0, attempts: 0 });
+    s.scoreSum += r.score; s.totalSum += r.total; s.attempts += 1;
+  }
+
   return {
     lecturers: lecturers || [],
-    courses: courses || [],
+    courses: (courses || []).map(c => {
+      const s = quizStatsByCourse[c.id];
+      return { ...c, avgQuizPct: s && s.totalSum > 0 ? Math.round((s.scoreSum / s.totalSum) * 100) : null, quizAttempts: s?.attempts || 0 };
+    }),
     students: (students || []).map(s => ({ ...s, modulesCompleted: completedByStudent[s.id] || 0 })),
   };
+}
+
+// ── Quiz — questions/options only ever reach the client via this function; correct_index
+//    and explanation stay server-side until after an answer is checked. ──────────────────
+export async function getQuizQuestions(moduleId) {
+  const { data, error } = await supabase.functions.invoke("quiz", { body: { action: "questions", moduleId } });
+  if (error) throw new Error(error.message || "Could not load quiz");
+  if (data?.error) throw new Error(data.error);
+  return data.questions || [];
+}
+
+export async function checkQuizAnswer({ questionId, selectedIndex }) {
+  const { data, error } = await supabase.functions.invoke("quiz", { body: { action: "check", questionId, selectedIndex } });
+  if (error) throw new Error(error.message || "Could not check answer");
+  if (data?.error) throw new Error(data.error);
+  return data; // { correct, correctIndex, explanation }
+}
+
+export async function submitQuizAttempt({ moduleId, courseId, answers }) {
+  const { data, error } = await supabase.functions.invoke("quiz", { body: { action: "submit", moduleId, courseId, answers } });
+  if (error) throw new Error(error.message || "Could not submit quiz");
+  if (data?.error) throw new Error(data.error);
+  return data; // { score, total }
 }
 
 // ── LTI / LMS integration ─────────────────────────────────────────────────────

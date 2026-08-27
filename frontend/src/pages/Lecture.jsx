@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { getCourse, generateNotes, recordProgress } from "../api";
+import { getCourse, generateNotes, recordProgress, getQuizQuestions, checkQuizAnswer, submitQuizAttempt } from "../api";
 import { downloadLectureNotesPdf } from "../lectureNotesPdf";
 import { useVoice } from "../hooks/useVoice";
 import { useSEMAI } from "../hooks/useSEMAI";
 import SlideScreen from "../components/SlideScreen";
 import IDEScreen   from "../components/IDEScreen";
+import QuizScreen  from "../components/QuizScreen";
 import ChatPanel   from "../components/ChatPanel";
 import Toolbar     from "../components/Toolbar";
 
@@ -12,7 +13,7 @@ const fmt = s => `${String(Math.floor(s/3600)).padStart(2,"0")}:${String(Math.fl
 
 export default function Lecture({ studentName, studentId, courseId, onLeave, onAdmin }) {
   const [course,   setCourse]   = useState(null);
-  const [screen,   setScreen]   = useState("welcome"); // welcome | menu | slides | ide
+  const [screen,   setScreen]   = useState("welcome"); // welcome | menu | slides | ide | quiz
   const [mod,      setMod]      = useState(null);
   const [slideIdx, setSlideIdx] = useState(0);
   const [secs,     setSecs]     = useState(0);
@@ -24,6 +25,14 @@ export default function Lecture({ studentName, studentId, courseId, onLeave, onA
   const [drawerOpen,setDrawerOpen]=useState(false);
   const [moduleComplete, setModuleComplete] = useState(false); // true once all slides for the current module are done
   const [notesLoading,   setNotesLoading]   = useState(false);
+
+  // ── Post-module quiz — required before a module counts as finished ──────
+  const [quizQuestions, setQuizQuestions] = useState([]);
+  const [quizIdx,       setQuizIdx]       = useState(0);
+  const [quizSelected,  setQuizSelected]  = useState(null);   // index the student just clicked, before grading
+  const [quizAnswered,  setQuizAnswered]  = useState(null);   // { correct, correctIndex, explanation } once graded
+  const [quizAnswers,   setQuizAnswers]   = useState([]);     // accumulated across the whole quiz
+  const [quizResult,    setQuizResult]    = useState(null);   // { score, total } once submitted
 
   // ── Autonomous lecture flow ────────────────────────────────────────────
   const [autoTeach, setAutoTeach] = useState(true);   // when on, SEMAI drives itself through the lecture
@@ -114,12 +123,7 @@ export default function Lecture({ studentName, studentId, courseId, onLeave, onA
   const continueNow = (isLast) => {
     clearCountdown(); setWaiting(false); voice.stopListening();
     if (isLast) {
-      setModuleComplete(true); // slides are done — lecture notes can now be generated for this module
-      const m = modRef.current;
-      recordProgress({ studentId, courseId, moduleId: m.id, completed: true }); // best-effort — powers the institution dashboard
-      const has = m?.practicalType && m.practicalType !== "none" && m.practical;
-      if (has) goIDEAuto();
-      else voice.speak(`Well done, class! That completes all the slides for ${m?.title}. This module doesn't include a hands-on exercise, so feel free to ask me questions, or choose another module whenever you're ready.`);
+      startQuizOrFinish(modRef.current);
       return;
     }
     const next = slideIdxRef.current + 1;
@@ -128,9 +132,75 @@ export default function Lecture({ studentName, studentId, courseId, onLeave, onA
     teach(modRef.current.title, s, next === modRef.current.slides.length - 1);
   };
 
+  // Slides for this module are done. If it has a quiz, that's required before the module
+  // counts as finished — otherwise fall straight through to the existing completion flow.
+  const startQuizOrFinish = async (m) => {
+    try {
+      const questions = await getQuizQuestions(m.id);
+      if (questions.length > 0) {
+        setQuizQuestions(questions); setQuizIdx(0); setQuizSelected(null); setQuizAnswered(null); setQuizAnswers([]); setQuizResult(null);
+        setScreen("quiz");
+        voice.speak(`Great work completing ${m.title}! Before we move on, let's do a quick check — a few questions on what we just covered.`, () => {
+          voice.speak(questions[0].question);
+        });
+        return;
+      }
+    } catch {
+      // Quiz fetch failed — don't leave the student stuck; finish the module normally.
+    }
+    finishModule(m);
+  };
+
+  const selectQuizAnswer = async (i) => {
+    if (quizSelected !== null) return;
+    setQuizSelected(i);
+    const q = quizQuestions[quizIdx];
+    try {
+      const result = await checkQuizAnswer({ questionId: q.id, selectedIndex: i });
+      setQuizAnswered(result);
+      setQuizAnswers(prev => [...prev, { questionId: q.id, selectedIndex: i, correct: result.correct }]);
+      voice.speak(`${result.correct ? "That's right!" : "Not quite."} ${result.explanation}`);
+    } catch {
+      const fallback = { correct: false, correctIndex: i, explanation: "Sorry, I couldn't check that just now — let's keep going." };
+      setQuizAnswered(fallback);
+      setQuizAnswers(prev => [...prev, { questionId: q.id, selectedIndex: i, correct: false }]);
+    }
+  };
+
+  const nextQuizQuestion = () => {
+    const next = quizIdx + 1;
+    if (next < quizQuestions.length) {
+      setQuizIdx(next); setQuizSelected(null); setQuizAnswered(null);
+      voice.speak(quizQuestions[next].question);
+    } else {
+      finishQuiz();
+    }
+  };
+
+  const finishQuiz = async () => {
+    const m = modRef.current;
+    const localScore = quizAnswers.filter(a => a.correct).length;
+    const localTotal = quizAnswers.length;
+    let result = { score: localScore, total: localTotal };
+    try {
+      result = await submitQuizAttempt({ moduleId: m.id, courseId, answers: quizAnswers });
+    } catch { /* best-effort — still show the student their score even if recording it failed */ }
+    setQuizResult(result);
+    voice.speak(`You got ${result.score} out of ${result.total}! Nicely done.`, () => finishModule(m));
+  };
+
   const pauseForQuestion = () => {
     clearCountdown(); setWaiting(false); voice.stopListening();
     setChatOpen(true); setUnread(0);
+  };
+
+  const finishModule = (m) => {
+    setModuleComplete(true); // slides (and quiz, if any) are done — lecture notes can now be generated
+    recordProgress({ studentId, courseId, moduleId: m.id, completed: true }); // best-effort — powers the institution dashboard
+    setScreen("slides"); // leave the quiz screen — goIDEAuto (if it runs next) will switch to "ide" itself
+    const has = m?.practicalType && m.practicalType !== "none" && m.practical;
+    if (has) goIDEAuto();
+    else voice.speak(`Well done, class! That completes all the slides for ${m?.title}. This module doesn't include a hands-on exercise, so feel free to ask me questions, or choose another module whenever you're ready.`);
   };
 
   const goIDEAuto = () => {
@@ -244,6 +314,7 @@ export default function Lecture({ studentName, studentId, courseId, onLeave, onA
           {mod && <span style={{ background:"#312E81", border:"1px solid #4338CA", borderRadius:20, padding:"1px 10px", fontSize:10, color:"#A5B4FC" }}>{mod.icon} {mod.title}</span>}
           {screen==="slides" && mod && <span style={{ fontSize:10, color:"#4B5563" }}>Slide {slideIdx+1}/{mod.slides.length}</span>}
           {screen==="ide"    && <span style={{ fontSize:10, color:"#4B5563" }}>📂 Practical</span>}
+          {screen==="quiz"   && mod && <span style={{ fontSize:10, color:"#A78BFA" }}>🎯 Quiz {Math.min(quizIdx+1, quizQuestions.length)}/{quizQuestions.length}</span>}
         </div>
         <span style={{ color:"#4B5563", fontSize:12, fontFamily:"monospace", position:"absolute", left:"50%", transform:"translateX(-50%)" }}>{fmt(secs)}</span>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -266,8 +337,8 @@ export default function Lecture({ studentName, studentId, courseId, onLeave, onA
               {notesLoading ? "Preparing…" : "📄 Notes"}
             </button>
           )}
-          <button onClick={()=>setDrawerOpen(o=>!o)}
-            style={{ background:drawerOpen?"#7C3AED":"#374151", border:"none", borderRadius:7, padding:"5px 11px", color:"white", cursor:"pointer", fontSize:12 }}>
+          <button onClick={()=>screen!=="quiz" && setDrawerOpen(o=>!o)} disabled={screen==="quiz"} title={screen==="quiz" ? "Finish the quiz first" : ""}
+            style={{ background:drawerOpen?"#7C3AED":"#374151", border:"none", borderRadius:7, padding:"5px 11px", color:screen==="quiz"?"#6B7280":"white", cursor:screen==="quiz"?"default":"pointer", fontSize:12, opacity:screen==="quiz"?0.5:1 }}>
             ☰ Modules
           </button>
           <button onClick={onAdmin}
@@ -338,6 +409,12 @@ export default function Lecture({ studentName, studentId, courseId, onLeave, onA
 
             {screen==="slides" && mod && <SlideScreen slide={mod.slides[slideIdx]} mod={mod} idx={slideIdx} total={mod.slides.length} courseTitle={course.title} institution={course.institution}/>}
             {screen==="ide"    && mod && <IDEScreen type={mod.practicalType} language={mod.practicalLanguage} content={mod.practical} note={mod.practicalNote} modTitle={mod.title} courseTag={course.id?.toUpperCase()}/>}
+            {screen==="quiz"   && mod && (
+              quizResult
+                ? <QuizScreen phase="result" result={quizResult} moduleTitle={mod.title}/>
+                : <QuizScreen phase="question" question={quizQuestions[quizIdx]} idx={quizIdx} total={quizQuestions.length}
+                    selected={quizSelected} answered={quizAnswered} onSelect={selectQuizAnswer} onNext={nextQuizQuestion}/>
+            )}
           </div>
 
           {(screen==="slides"||screen==="ide") && mod && (

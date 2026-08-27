@@ -278,3 +278,69 @@ create policy "admins manage own institution platforms" on public.lti_platforms
   );
 -- lti_identities has no policies for anon/authenticated — service-role only, accessed
 -- exclusively from the lti-launch Edge Function.
+
+-- ── Post-module quiz ─────────────────────────────────────────────────────────
+-- Generated alongside the course itself (same Gemini call as the slides — see
+-- supabase/functions/generate-course), so every student answers the SAME questions —
+-- that's what makes aggregate scores a meaningful "is this lecture working" signal
+-- rather than noise from randomized questions.
+create table if not exists public.quiz_questions (
+  id uuid primary key default gen_random_uuid(),
+  module_id uuid references public.modules(id) on delete cascade,
+  position int not null default 0,
+  question text not null,
+  options jsonb not null default '[]'::jsonb,
+  correct_index int not null,
+  explanation text default '',
+  objective text default ''
+);
+
+create table if not exists public.quiz_attempts (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references auth.users(id) on delete cascade,
+  module_id uuid references public.modules(id) on delete cascade,
+  course_id text references public.courses(id) on delete cascade,
+  score int not null default 0,
+  total int not null default 0,
+  answers jsonb not null default '[]'::jsonb,
+  completed_at timestamptz default now(),
+  unique (student_id, module_id)
+);
+
+alter table public.quiz_questions enable row level security;
+alter table public.quiz_attempts  enable row level security;
+
+-- Students NEVER get a direct read policy on quiz_questions — correct_index must never be
+-- readable by the client before grading. Students only ever see questions/options via the
+-- `quiz` Edge Function (service role), which strips correct_index/explanation before
+-- returning them, and grades answers server-side.
+create policy "staff view quiz questions within institution" on public.quiz_questions
+  for select using (
+    exists (
+      select 1 from public.modules m join public.courses c on c.id = m.course_id
+      join public.profiles p on p.id = auth.uid()
+      where m.id = quiz_questions.module_id
+        and p.role in ('lecturer','institution_admin')
+        and (c.institution_id is null or c.lecturer_id = auth.uid() or c.institution_id = p.institution_id)
+    )
+  );
+
+create policy "lecturers manage quiz questions for own courses" on public.quiz_questions
+  for all using (
+    exists (select 1 from public.modules m join public.courses c on c.id = m.course_id where m.id = quiz_questions.module_id and c.lecturer_id = auth.uid())
+  ) with check (
+    exists (select 1 from public.modules m join public.courses c on c.id = m.course_id where m.id = quiz_questions.module_id and c.lecturer_id = auth.uid())
+  );
+
+create policy "students manage own quiz attempts" on public.quiz_attempts
+  for all using (auth.uid() = student_id) with check (auth.uid() = student_id);
+
+create policy "staff view quiz attempts for their institution" on public.quiz_attempts
+  for select using (
+    exists (
+      select 1 from public.courses c join public.profiles p on p.id = auth.uid()
+      where c.id = quiz_attempts.course_id
+        and p.role in ('lecturer','institution_admin')
+        and c.institution_id = p.institution_id
+    )
+  );

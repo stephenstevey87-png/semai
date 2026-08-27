@@ -60,7 +60,16 @@ EXACTLY this schema:
       "practicalType": "code | example | none",
       "practicalLanguage": "the programming language if practicalType is code, e.g. java, python, sql — otherwise empty string",
       "practical": "the hands-on content — RAW plain text only, no markdown fences, no HTML: if practicalType is code, a complete working code example; if practicalType is example, a short worked example, mini case study, or practice scenario relevant to the subject; if practicalType is none, an empty string",
-      "practicalNote": "2-3 sentences (plain text, no markdown) explaining what the practical section demonstrates — or empty string if practicalType is none"
+      "practicalNote": "2-3 sentences (plain text, no markdown) explaining what the practical section demonstrates — or empty string if practicalType is none",
+      "quiz": [
+        {
+          "objective": "the specific learning objective this question tests, e.g. 'Distinguish between fixed and variable costs'",
+          "question": "a clear question testing that objective, grounded in what the slides actually taught",
+          "options": ["option A", "option B", "option C", "option D"],
+          "correctIndex": 0,
+          "explanation": "1-2 sentences explaining why the correct answer is correct — shown to the student after they answer"
+        }
+      ]
     }
   ]
 }
@@ -85,8 +94,31 @@ Rules for SLIDE CONTENT — this is critical, read carefully:
 - Produce 3 to 7 modules depending on how much source material is given — don't pad if the source is thin.
 - Each module should have 2 to 4 slides.
 - The "practical" field must be plain text only — never wrap it in fences or HTML, regardless of practicalType.
+
+Rules for "quiz" — this is what the student is tested on right after finishing the module's slides:
+- 3 to 5 questions per module, each tied to a genuinely distinct learning objective covered by that
+  module's slides — don't write two questions testing the same thing.
+- Every question must be answerable from what the slides actually taught — never test something the
+  slides didn't cover, and never require outside knowledge.
+- Exactly 4 options per question, plausible distractors (not obviously wrong filler) — correctIndex is
+  0-based (0,1,2, or 3).
+- explanation should teach, not just confirm: briefly say WHY the correct answer is right, in a way that
+  reinforces the underlying concept even for a student who got it wrong.
 - Base everything strictly on the source material provided.
 - Output must be a single JSON object and nothing else.`;
+
+function sanitizeQuizQuestion(q: any) {
+  const options = Array.isArray(q.options) ? q.options.filter((o: any) => typeof o === "string" && o.trim()) : [];
+  let correctIndex = Number.isInteger(q.correctIndex) ? q.correctIndex : 0;
+  if (correctIndex < 0 || correctIndex >= options.length) correctIndex = 0;
+  return {
+    objective: (q.objective || "").trim(),
+    question: (q.question || "").trim(),
+    options,
+    correctIndex,
+    explanation: (q.explanation || "").trim(),
+  };
+}
 
 function sanitizeModule(m: any, i: number) {
   const id = m.id || slugify(m.title || `module-${i}`);
@@ -97,12 +129,13 @@ function sanitizeModule(m: any, i: number) {
     bullets: (s.bullets || []).filter((b: any) => typeof b === "string" && b.trim()),
     highlight: (s.highlight || "").trim(),
   }));
+  const quiz = (m.quiz || []).map(sanitizeQuizQuestion).filter((q: any) => q.question && q.options.length >= 2);
   let practicalType = m.practicalType;
   if (!["code", "example", "none"].includes(practicalType)) {
     practicalType = m.practical ? "example" : "none";
   }
   return {
-    id, icon, title: m.title || `Module ${i + 1}`, slides,
+    id, icon, title: m.title || `Module ${i + 1}`, slides, quiz,
     practicalType,
     practicalLanguage: (m.practicalLanguage || "").toLowerCase(),
     practical: stripCodeFences(m.practical || ""),
@@ -145,7 +178,7 @@ Deno.serve(async (req: Request) => {
           system_instruction: { parts: [{ text: GENERATE_SYSTEM_PROMPT }] },
           contents: [{ role: "user", parts: [{ text: userMessage }] }],
           generationConfig: {
-            maxOutputTokens: 8000,
+            maxOutputTokens: 12000,
             responseMimeType: "application/json", // Gemini can be constrained to emit valid JSON directly
           },
         }),

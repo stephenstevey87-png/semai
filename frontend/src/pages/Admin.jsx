@@ -444,12 +444,23 @@ export default function Admin({ onBack }) {
                 </div>
 
                 <div style={{ background:"#1A1A2E", border:"1px solid #2D2D4A", borderRadius:14, padding:20 }}>
-                  <h4 style={{ margin:"0 0 12px", fontSize:13, color:"#A78BFA" }}>📚 Courses ({dash.courses.length})</h4>
+                  <h4 style={{ margin:"0 0 4px", fontSize:13, color:"#A78BFA" }}>📚 Courses ({dash.courses.length})</h4>
+                  <p style={{ color:"#4B5563", fontSize:11, margin:"0 0 12px" }}>Avg. quiz score is the clearest signal of whether a lecture is actually landing.</p>
                   {dash.courses.length === 0 && <p style={{ color:"#4B5563", fontSize:12 }}>No courses added yet.</p>}
                   {dash.courses.map(c => (
-                    <div key={c.id} style={{ display:"flex", justifyContent:"space-between", padding:"7px 0", borderBottom:"1px solid #2D2D2D", fontSize:12.5 }}>
-                      <span>{c.title}{c.subject ? ` · ${c.subject}` : ""}</span>
-                      <span style={{ color:"#4B5563" }}>{c.lecturer_name}</span>
+                    <div key={c.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:"1px solid #2D2D2D", fontSize:12.5 }}>
+                      <span>{c.title}{c.subject ? ` · ${c.subject}` : ""}<span style={{ color:"#4B5563" }}> · {c.lecturer_name}</span></span>
+                      {c.avgQuizPct !== null ? (
+                        <span style={{
+                          background: c.avgQuizPct >= 70 ? "rgba(52,211,153,0.15)" : c.avgQuizPct >= 50 ? "rgba(251,191,36,0.15)" : "rgba(248,113,113,0.15)",
+                          color: c.avgQuizPct >= 70 ? "#6EE7B7" : c.avgQuizPct >= 50 ? "#FCD34D" : "#FCA5A5",
+                          borderRadius:20, padding:"3px 12px", fontSize:11.5, fontWeight:600, whiteSpace:"nowrap",
+                        }}>
+                          {c.avgQuizPct}% avg · {c.quizAttempts} quiz{c.quizAttempts===1?"":"zes"} taken
+                        </span>
+                      ) : (
+                        <span style={{ color:"#4B5563", fontSize:11 }}>No quiz data yet</span>
+                      )}
                     </div>
                   ))}
                 </div>
