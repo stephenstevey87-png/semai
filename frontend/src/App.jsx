@@ -43,7 +43,7 @@ export default function App() {
           setPage("deeplink");
         } else {
           const profile = await getUserProfile(session.user.id);
-          if (!cancelled) join(profile?.name || session.user.email, ltiCourse, session.user.id);
+          if (!cancelled) join(profile?.name || profile?.username || "Student", ltiCourse, session.user.id);
         }
         window.history.replaceState({}, "", window.location.pathname); // drop the query param
         setLtiChecking(false);

@@ -95,7 +95,7 @@ export async function saveCourse(course) {
   // university's course catalog scoped to its own students (see institution-scoped RLS
   // policies in supabase/schema.sql). A lecturer with no institution_id (a legacy/independent
   // account) still saves fine; that course just stays visible campus-wide as before.
-  const { data: profile } = await supabase.from("profiles").select("institution_id").eq("id", session.user.id).single();
+  const { data: profile } = await supabase.from("profiles").select("institution_id, name, username").eq("id", session.user.id).single();
 
   const { error: courseErr } = await supabase.from("courses").upsert({
     id: courseId,
@@ -104,7 +104,7 @@ export async function saveCourse(course) {
     subject: course.subject || "",
     outline: course.outline || "",
     lecturer_id: session.user.id,
-    lecturer_name: course.lecturer || session.user.email,
+    lecturer_name: course.lecturer || profile?.name || profile?.username || "",
     institution: course.institution || "",
     institution_id: profile?.institution_id || null,
   });

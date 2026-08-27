@@ -24,7 +24,7 @@ Netlify (static React/Vite build)
         ▼
 Supabase
   ├─ Postgres database   (courses, modules, slides, profiles) — RLS-protected
-  ├─ Auth                (lecturer sign-in, email + password)
+  ├─ Auth                (username sign-in, no email required — see Auth section below)
   └─ Edge Functions       (chat, explain-slide, generate-course)
                            — holds GEMINI_API_KEY server-side, calls Gemini
 ```
@@ -124,10 +124,11 @@ SEMAI is multi-tenant: each university/school is its own isolated space — its 
 catalog and student roster are only visible to its own people, not shared globally.
 
 1. Open SEMAI → **Lecturer or administrator? Sign in here** → **Register new institution**
-2. Enter your institution's name, your own name, email, and password → **Create Account**
-3. Confirm your email, then sign in — you're now that institution's **institution_admin**,
-   with a **🏛 Institution Dashboard** tab showing every lecturer, course, and student at
-   your institution, plus real completion data as students progress through lectures
+2. Enter your institution's name, your own name, a username, and password → **Create Account**
+3. You're immediately signed in — no email confirmation step exists anywhere in this
+   flow — as that institution's **institution_admin**, with a **🏛 Institution Dashboard**
+   tab showing every lecturer, course, and student at your institution, plus real
+   completion data as students progress through lectures
 
 ## Step 5 — Add lecturers and courses
 
@@ -143,8 +144,9 @@ catalog and student roster are only visible to its own people, not shared global
 
 ## Step 6 — Students join
 
-- Students sign up on the main Join screen with their own name, email, password, and their
-  institution (picked from the same dropdown) — real accounts, not name-only entry
+- Students sign up on the main Join screen with their own name, a username, password, and
+  their institution (picked from the same dropdown) — real accounts, not name-only entry,
+  and no email address needed at all
 - Once signed in, they see only their own institution's courses and can join any lecture
 - Progress (which modules they've completed) is recorded automatically and shows up on the
   institution_admin's dashboard
@@ -172,6 +174,25 @@ and Docker).
 Functions. It's kept in the repo for reference but is **not part of the deployed app**
 and doesn't need `GEMINI_API_KEY`, Render, or anything else set up for it to work —
 the frontend no longer calls it. Safe to delete if you don't need the reference.
+
+## Auth — usernames, no email required
+
+Nobody types or sees a real email address anywhere in SEMAI — not at signup, not at sign-in,
+not anywhere in the UI. Supabase Auth is internally still email-based, so under the hood
+each username maps deterministically to a synthetic, non-routable address
+(`<username>@users.semai.invalid`), and the account is created via the Supabase **admin**
+API with `email_confirm: true` — which is what skips the confirmation-email step entirely.
+Sign-up and sign-in both happen in one step, with no "check your inbox" wait at any point:
+
+- **Sign-up** goes through `supabase/functions/signup`, since only the service-role key can
+  call the admin API. It validates the username, creates the (already-confirmed) account,
+  and the frontend then signs straight in with the same credentials.
+- **Sign-in** never calls that function — it recomputes the same username → email transform
+  locally and calls `supabase.auth.signInWithPassword()` directly, no server round-trip needed.
+- Usernames are globally unique across the whole platform (letters, numbers, dots, dashes,
+  underscores only, 3+ characters) — not scoped per institution.
+- LTI-provisioned accounts (arriving via LMS single sign-on) never set a username at all —
+  they don't use this sign-in path, so `profiles.username` is null for them.
 
 ## Post-Module Quiz
 

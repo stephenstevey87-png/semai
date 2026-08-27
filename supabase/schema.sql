@@ -24,16 +24,22 @@ create table if not exists public.institutions (
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   name text not null,
+  username text unique,                -- login handle; null for LTI-provisioned (SSO) accounts
   institution text,                    -- legacy free-text field, kept for backward display compat
   institution_id uuid references public.institutions(id),
   role text not null default 'lecturer' check (role in ('lecturer','student','institution_admin')),
   created_at timestamptz default now()
 );
 
--- Signup metadata shape, passed via supabase.auth.signUp({ options: { data: {...} } }):
---   { name, role: 'lecturer'|'student', institutionId: '<uuid of existing institution>' }
+-- Accounts are created via the `signup` Edge Function (not the client-side signUp()), which
+-- maps a username to a deterministic, non-routable synthetic email and creates the user
+-- through the admin API with email_confirm:true — this is what avoids the email confirmation
+-- flow entirely. Nobody ever sees or types a real email anywhere in the app.
+--
+-- Signup metadata shape (set as user_metadata by the signup function):
+--   { name, username, role: 'lecturer'|'student', institutionId: '<uuid of existing institution>' }
 --     — joins an existing institution with the given role.
---   { name, newInstitutionName: 'Some University' }
+--   { name, username, newInstitutionName: 'Some University' }
 --     — registers a brand-new institution; the signing-up user always becomes its
 --       institution_admin regardless of any role value passed alongside it.
 create or replace function public.handle_new_user()
@@ -65,13 +71,14 @@ begin
     target_institution_id := nullif(meta->>'institutionId', '')::uuid;
   end if;
 
-  insert into public.profiles (id, name, institution, institution_id, role)
+  insert into public.profiles (id, name, institution, institution_id, role, username)
   values (
     new.id,
     coalesce(meta->>'name', new.email),
     meta->>'institution',
     target_institution_id,
-    chosen_role
+    chosen_role,
+    meta->>'username'
   );
   return new;
 end;

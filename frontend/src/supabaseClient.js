@@ -38,24 +38,39 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ── Auth helpers — shared by lecturers, students, and institution admins ─────────
+// ── Username-based auth — shared by lecturers, students, and institution admins ────────
+// Supabase Auth is internally still email-based, so every username maps deterministically
+// to a synthetic, non-routable email under the hood. Nobody ever sees this — it exists
+// purely so we can keep using Supabase's built-in auth system without its email-confirmation
+// flow, which is what this whole approach exists to avoid. MUST match the same transform
+// used server-side in supabase/functions/signup — sign-in never asks the server "what's
+// this username's email", it just recomputes it locally.
+function usernameToEmail(username) {
+  const normalized = (username || "").trim().toLowerCase().replace(/[^a-z0-9_.-]/g, "");
+  return `${normalized}@users.semai.invalid`;
+}
+
 // role: 'lecturer' | 'student' | 'institution_admin'
 // Pass institutionId to join an existing institution, OR newInstitutionName to register
 // a brand-new one (which always makes the signing-up user its institution_admin — see
 // the handle_new_user() trigger in supabase/schema.sql).
-export async function signUpUser({ email, password, name, role, institutionId, newInstitutionName }) {
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: { data: { name, role, institutionId, newInstitutionName } },
+export async function signUpUser({ username, password, name, role, institutionId, newInstitutionName }) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY },
+    body: JSON.stringify({ username, password, name, role, institutionId, newInstitutionName }),
   });
-  if (error) throw error;
-  return data;
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error || "Sign up failed.");
+
+  // The account is created pre-confirmed (email_confirm: true server-side), so we can sign
+  // straight in — no separate "check your email" step needed at any point in this flow.
+  return signInUser({ username, password });
 }
 
-export async function signInUser({ email, password }) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+export async function signInUser({ username, password }) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email: usernameToEmail(username), password });
+  if (error) throw new Error(/invalid.*credentials/i.test(error.message) ? "Incorrect username or password." : error.message);
   return data;
 }
 
@@ -71,5 +86,5 @@ export async function getCurrentSession() {
 export async function getUserProfile(userId) {
   const { data, error } = await supabase.from("profiles").select("*, institutions(name)").eq("id", userId).single();
   if (error) return null;
-  return data; // { id, name, role, institution_id, institutions: { name } }
+  return data; // { id, name, username, role, institution_id, institutions: { name } }
 }

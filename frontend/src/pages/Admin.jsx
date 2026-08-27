@@ -12,7 +12,7 @@ export default function Admin({ onBack }) {
   const [authMode, setAuthMode] = useState("signin"); // signin | signup
   const [signupKind, setSignupKind] = useState("join"); // join (existing institution, as lecturer) | register (new institution, becomes admin)
   const [institutions, setInstitutions] = useState([]);
-  const [authForm, setAuthForm] = useState({ email:"", password:"", name:"", institutionId:"", newInstitutionName:"" });
+  const [authForm, setAuthForm] = useState({ username:"", password:"", name:"", institutionId:"", newInstitutionName:"" });
   const [authStatus, setAuthStatus] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
@@ -75,16 +75,17 @@ export default function Admin({ onBack }) {
     try {
       if (authMode === "signup") {
         if (!authForm.name.trim()) throw new Error("Name is required.");
+        if (!authForm.username.trim()) throw new Error("Username is required.");
         if (signupKind === "join" && !authForm.institutionId) throw new Error("Please select your institution.");
         if (signupKind === "register" && !authForm.newInstitutionName.trim()) throw new Error("Institution name is required.");
         await signUpUser({
-          email: authForm.email, password: authForm.password, name: authForm.name,
+          username: authForm.username, password: authForm.password, name: authForm.name,
           role: "lecturer",
           institutionId: signupKind === "join" ? authForm.institutionId : undefined,
           newInstitutionName: signupKind === "register" ? authForm.newInstitutionName.trim() : undefined,
         });
-        setAuthStatus("✅ Account created! Check your email to confirm, then sign in.");
-        setAuthMode("signin");
+        // signUpUser signs the account straight in — no email confirmation step exists in
+        // this flow at all, so there's nothing further to wait on here.
       } else {
         await signInUser(authForm);
       }
@@ -239,10 +240,11 @@ export default function Admin({ onBack }) {
                 )}
               </>
             )}
-            <label style={{ display:"block", color:"#6B7280", fontSize:11, marginBottom:4 }}>EMAIL *</label>
-            <input type="email" value={authForm.email} onChange={e=>setAuthForm(f=>({...f,email:e.target.value}))}
-              placeholder="you@example.com"
+            <label style={{ display:"block", color:"#6B7280", fontSize:11, marginBottom:4 }}>USERNAME *</label>
+            <input value={authForm.username} onChange={e=>setAuthForm(f=>({...f,username:e.target.value}))}
+              placeholder="e.g. ssemambo.steven" autoCapitalize="off" autoCorrect="off"
               style={{ width:"100%", padding:"11px 14px", borderRadius:10, border:"1px solid #3730A3", background:"#0F0C29", color:"white", fontSize:14, marginBottom:12, boxSizing:"border-box" }}/>
+            {authMode === "signup" && <p style={{ color:"#4B5563", fontSize:10.5, margin:"-8px 0 12px" }}>Letters, numbers, dots, dashes, and underscores only.</p>}
             <label style={{ display:"block", color:"#6B7280", fontSize:11, marginBottom:4 }}>PASSWORD *</label>
             <input type="password" value={authForm.password} onChange={e=>setAuthForm(f=>({...f,password:e.target.value}))}
               onKeyDown={e=>e.key==="Enter"&&submitAuth()} placeholder="At least 6 characters"
@@ -250,7 +252,7 @@ export default function Admin({ onBack }) {
 
             {authStatus && <p style={{ color: authStatus.startsWith("✅")?"#34D399":"#F87171", fontSize:12, marginBottom:12 }}>{authStatus}</p>}
 
-            <button onClick={submitAuth} disabled={authLoading || !authForm.email.trim() || !authForm.password.trim()}
+            <button onClick={submitAuth} disabled={authLoading || !authForm.username.trim() || !authForm.password.trim()}
               style={{ width:"100%", padding:"13px", borderRadius:10, border:"none", background:authLoading?"#374151":"linear-gradient(135deg,#7C3AED,#4F46E5)", color:"white", fontSize:14, fontWeight:700, cursor:authLoading?"default":"pointer", marginBottom:12 }}>
               {authLoading ? "Please wait…" : authMode === "signup" ? "Create Account →" : "Sign In →"}
             </button>
@@ -267,7 +269,7 @@ export default function Admin({ onBack }) {
   }
 
   // ── Signed in ────────────────────────────────────────────────────────────
-  const displayName = profile?.name || session.user.email;
+  const displayName = profile?.name || profile?.username || "there";
   const isAdmin = profile?.role === "institution_admin";
   const tabs = isAdmin ? ["list","generate","institution","lms"] : ["list","generate"];
 
@@ -302,7 +304,7 @@ export default function Admin({ onBack }) {
             </p>
             {courses.length === 0 && <p style={{ color:"#4B5563", textAlign:"center", marginTop:30 }}>No courses yet. Try "Add a Course Unit" above.</p>}
             {courses.map(c => {
-              const isMine = c.lecturer && (c.lecturer === profile?.name || c.lecturer === session.user.email);
+              const isMine = c.lecturer && (c.lecturer === profile?.name || c.lecturer === profile?.username);
               return (
                 <div key={c.id} style={{ background:"#1A1A2E", border:"1px solid #2D2D4A", borderRadius:12, padding:"16px 18px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:10 }}>
                   <div>
